@@ -3,8 +3,8 @@ import { Inter, Source_Code_Pro } from "next/font/google";
 import { SafeArea } from "@coinbase/onchainkit/minikit";
 import { minikitConfig } from "@/minikit.config";
 import { RootProvider } from "./rootProvider";
-import "./globals.css";
 import MiniKitReady from "./_components/MiniKitReady";
+import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
   return {
@@ -42,12 +42,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <RootProvider>
-      <html lang="en">
-        <body className={`${inter.variable} ${sourceCodePro.variable}`}>
+    <html lang="en" className={`${inter.variable} ${sourceCodePro.variable}`}>
+      <body>
+        <RootProvider>
+          {/* ✅ This must render on the client to dismiss the splash */}
+          <MiniKitReady />
+
           <SafeArea>{children}</SafeArea>
-        </body>
-      </html>
-    </RootProvider>
+        </RootProvider>
+      </body>
+    </html>
   );
 }
