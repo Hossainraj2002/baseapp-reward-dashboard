@@ -1,9 +1,9 @@
 import path from "path";
 
 const config = {
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  // Next.js 16 uses Turbopack by default. Add an empty turbopack config to
+  // allow a custom webpack config without build errors.
+  turbopack: {},
 
   webpack: (webpackConfig: any) => {
     // Keep your existing externals
