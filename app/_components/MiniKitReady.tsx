@@ -5,24 +5,34 @@ import { useEffect } from "react";
 export default function MiniKitReady() {
   useEffect(() => {
     let cancelled = false;
+    let done = false;
 
-    async function run() {
-      try {
-        // Dynamically import so it never runs on the server
-        const mod = await import("@farcaster/miniapp-sdk");
-        const sdk: any = (mod as any).default ?? mod;
+    const run = async () => {
+      const maxTries = 20;
 
-        // Some SDK builds expose actions under sdk.actions
-        // We guard to avoid crashing if running in normal browser.
-        if (!cancelled && sdk?.actions?.ready) {
-          await sdk.actions.ready();
+      for (let i = 0; i < maxTries; i++) {
+        if (cancelled || done) return;
+
+        try {
+          const mod = await import("@farcaster/miniapp-sdk");
+          const sdk = (mod as any).sdk;
+
+          if (sdk?.actions?.ready) {
+            await sdk.actions.ready();
+            done = true;
+            return;
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // Ignore in normal web browsers
+
+        // wait a bit then retry
+        await new Promise((r) => setTimeout(r, 250));
       }
-    }
+    };
 
     run();
+
     return () => {
       cancelled = true;
     };
