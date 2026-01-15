@@ -3,8 +3,8 @@ import { Inter, Source_Code_Pro } from "next/font/google";
 import { SafeArea } from "@coinbase/onchainkit/minikit";
 import { minikitConfig } from "@/minikit.config";
 import { RootProvider } from "./rootProvider";
-import MiniKitReady from "./_components/MiniKitReady";
 import "./globals.css";
+import MiniKitReady from "./_components/MiniKitReady";
 
 export async function generateMetadata(): Promise<Metadata> {
   return {
@@ -26,11 +26,7 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-});
-
+const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 const sourceCodePro = Source_Code_Pro({
   variable: "--font-source-code-pro",
   subsets: ["latin"],
@@ -38,16 +34,13 @@ const sourceCodePro = Source_Code_Pro({
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${sourceCodePro.variable}`}>
-      <body>
+    <html lang="en">
+      <body className={`${inter.variable} ${sourceCodePro.variable}`}>
         <RootProvider>
-          {/* ✅ This must render on the client to dismiss the splash */}
+          {/* Ensures Farcaster splash disappears in Mini App */}
           <MiniKitReady />
-
           <SafeArea>{children}</SafeArea>
         </RootProvider>
       </body>
