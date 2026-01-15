@@ -3,8 +3,9 @@ import { Inter, Source_Code_Pro } from "next/font/google";
 import { SafeArea } from "@coinbase/onchainkit/minikit";
 import { minikitConfig } from "@/minikit.config";
 import { RootProvider } from "./rootProvider";
-import "./globals.css";
 import MiniKitReady from "./_components/MiniKitReady";
+import BottomNav from "./_components/BottomNav";
+import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
   return {
@@ -26,7 +27,11 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
+const inter = Inter({
+  variable: "--font-inter",
+  subsets: ["latin"],
+});
+
 const sourceCodePro = Source_Code_Pro({
   variable: "--font-source-code-pro",
   subsets: ["latin"],
@@ -39,9 +44,16 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${inter.variable} ${sourceCodePro.variable}`}>
         <RootProvider>
-          {/* Ensures Farcaster splash disappears in Mini App */}
+          {/* ✅ REQUIRED: hide Farcaster splash */}
           <MiniKitReady />
-          <SafeArea>{children}</SafeArea>
+
+          <SafeArea>
+            {/* ✅ Content padding so bottom nav doesn’t cover UI */}
+            <div style={{ paddingBottom: 96 }}>{children}</div>
+
+            {/* ✅ Persistent navigation on all pages */}
+            <BottomNav />
+          </SafeArea>
         </RootProvider>
       </body>
     </html>
