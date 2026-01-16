@@ -6,82 +6,45 @@ import { usePathname } from "next/navigation";
 const TABS = [
   { href: "/", label: "Home" },
   { href: "/weekly", label: "Weekly" },
-  { href: "/alltime", label: "All-time" },
-  { href: "/me", label: "Me" },
+  { href: "/all-time", label: "All-time" },
+  { href: "/profile", label: "Profile" },
+  { href: "/find", label: "Find" },
 ];
 
 function isActive(pathname: string, href: string) {
   if (href === "/") return pathname === "/";
-  return pathname.startsWith(href);
+  return pathname === href || pathname.startsWith(href + "/");
 }
 
 export default function BottomNav() {
-  const pathname = usePathname();
+  const pathname = usePathname() || "/";
 
   return (
-    <nav className="bn">
-      <div className="bnInner">
-        {TABS.map((t) => {
-          const active = isActive(pathname, t.href);
-          return (
-            <Link
-              key={t.href}
-              href={t.href}
-              className={`bnItem ${active ? "bnActive" : ""}`}
-            >
-              {t.label}
-            </Link>
-          );
-        })}
+    <nav
+      className="fixed bottom-0 left-0 right-0 z-50 mx-auto w-full max-w-md"
+      aria-label="Bottom navigation"
+    >
+      <div className="mx-3 mb-3 rounded-3xl border border-slate-200 bg-[#1E4FFF] shadow-lg">
+        <div className="grid grid-cols-5 gap-1 p-2">
+          {TABS.map((t) => {
+            const active = isActive(pathname, t.href);
+            return (
+              <Link
+                key={t.href}
+                href={t.href}
+                className={[
+                  "rounded-2xl px-2 py-2 text-center text-xs font-extrabold",
+                  active
+                    ? "bg-white text-[#1E4FFF]"
+                    : "text-white/90 hover:bg-white/15",
+                ].join(" ")}
+              >
+                {t.label}
+              </Link>
+            );
+          })}
+        </div>
       </div>
-
-      <style jsx>{`
-        .bn {
-          position: fixed;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          z-index: 9999;
-          padding: 10px 12px 12px;
-          pointer-events: none;
-        }
-
-        .bnInner {
-          pointer-events: auto;
-          max-width: 430px;
-          margin: 0 auto;
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 8px;
-
-          border-radius: 18px;
-          padding: 10px;
-
-          /* Liquid-glass royal blue */
-          background: rgba(30, 79, 255, 0.88);
-          backdrop-filter: blur(10px);
-          border: 1px solid rgba(255, 255, 255, 0.18);
-          box-shadow: 0 10px 30px rgba(2, 8, 23, 0.18);
-        }
-
-        .bnItem {
-          text-align: center;
-          padding: 10px 8px;
-          border-radius: 14px;
-          font-size: 12px;
-          font-weight: 900;
-          text-decoration: none;
-          color: rgba(255, 255, 255, 0.85);
-          letter-spacing: -0.1px;
-          user-select: none;
-        }
-
-        .bnActive {
-          background: rgba(255, 255, 255, 0.18);
-          color: #ffffff;
-          border: 1px solid rgba(255, 255, 255, 0.22);
-        }
-      `}</style>
     </nav>
   );
 }

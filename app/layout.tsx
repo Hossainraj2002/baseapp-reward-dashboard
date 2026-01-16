@@ -3,8 +3,8 @@ import { Inter, Source_Code_Pro } from "next/font/google";
 import { SafeArea } from "@coinbase/onchainkit/minikit";
 import { minikitConfig } from "@/minikit.config";
 import { RootProvider } from "./rootProvider";
-import MiniKitReady from "./_components/MiniKitReady";
 import BottomNav from "./_components/BottomNav";
+import MiniKitReady from "./_components/MiniKitReady";
 import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -17,43 +17,30 @@ export async function generateMetadata(): Promise<Metadata> {
         imageUrl: minikitConfig.miniapp.heroImageUrl,
         button: {
           title: `Launch ${minikitConfig.miniapp.name}`,
-          action: {
-            name: `Launch ${minikitConfig.miniapp.name}`,
-            type: "launch_miniapp",
-          },
+          action: { name: `Launch ${minikitConfig.miniapp.name}`, type: "launch_miniapp" },
         },
       }),
     },
   };
 }
 
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-});
-
+const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 const sourceCodePro = Source_Code_Pro({
   variable: "--font-source-code-pro",
   subsets: ["latin"],
 });
 
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body className={`${inter.variable} ${sourceCodePro.variable}`}>
         <RootProvider>
-          {/* ✅ REQUIRED: hide Farcaster splash */}
           <MiniKitReady />
-
+          {/* IMPORTANT: padding bottom so content never hides behind BottomNav */}
           <SafeArea>
-            {/* ✅ Content padding so bottom nav doesn’t cover UI */}
-            <div style={{ paddingBottom: 96 }}>{children}</div>
-
-            {/* ✅ Persistent navigation on all pages */}
-            <BottomNav />
+            <div className="mx-auto w-full max-w-md pb-28">{children}</div>
           </SafeArea>
+          <BottomNav />
         </RootProvider>
       </body>
     </html>
