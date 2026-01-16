@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
 import { readJson } from "@/lib/data";
 
-type Row = {
-  rank: number;
-  user_address: string;
-  this_week_reward: number;
-  previous_week_reward: number;
-  all_time_reward: number;
+type Snap = {
+  columns: string[];
+  rows: Record<string, any>[];
+  meta: any;
 };
 
 export async function GET(req: Request) {
@@ -16,17 +14,20 @@ export async function GET(req: Request) {
   const offset = Math.max(Number(searchParams.get("offset") || 0), 0);
   const search = (searchParams.get("search") || "").trim().toLowerCase();
 
-  const snap = readJson<{ rows: Row[]; meta: any }>("leaderboard_weekly_latest.json");
+  const snap = readJson<Snap>("leaderboard_all_time.json");
   let rows = snap.rows || [];
 
   if (search) {
-    rows = rows.filter((r) => r.user_address.toLowerCase().includes(search));
+    rows = rows.filter((r) =>
+      String(r.user_address || "").toLowerCase().includes(search)
+    );
   }
 
   const total = rows.length;
   const pageRows = rows.slice(offset, offset + limit);
 
   return NextResponse.json({
+    columns: snap.columns || [],
     rows: pageRows,
     meta: {
       ...snap.meta,
