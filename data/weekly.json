@@ -1,0 +1,178 @@
+{
+  "weeks": [
+    {
+      "weekNumber": 26,
+      "weekLabel": "Week 26 – 14 Jan 2026",
+      "weekStartDate": "2026-01-14",
+      "totalUsdcAmount": 12544,
+      "totalUniqueUsers": 1956
+    },
+    {
+      "weekNumber": 25,
+      "weekLabel": "Week 25 – 07 Jan 2026",
+      "weekStartDate": "2026-01-07",
+      "totalUsdcAmount": 12280,
+      "totalUniqueUsers": 1947
+    },
+    {
+      "weekNumber": 24,
+      "weekLabel": "Week 24 – 31 Dec 2025",
+      "weekStartDate": "2025-12-31",
+      "totalUsdcAmount": 12146,
+      "totalUniqueUsers": 1951
+    },
+    {
+      "weekNumber": 23,
+      "weekLabel": "Week 23 – 24 Dec 2025",
+      "weekStartDate": "2025-12-24",
+      "totalUsdcAmount": 12909,
+      "totalUniqueUsers": 1959
+    },
+    {
+      "weekNumber": 22,
+      "weekLabel": "Week 22 – 17 Dec 2025",
+      "weekStartDate": "2025-12-17",
+      "totalUsdcAmount": 12293,
+      "totalUniqueUsers": 1946
+    },
+    {
+      "weekNumber": 21,
+      "weekLabel": "Week 21 – 10 Dec 2025",
+      "weekStartDate": "2025-12-10",
+      "totalUsdcAmount": 12610,
+      "totalUniqueUsers": 1941
+    },
+    {
+      "weekNumber": 20,
+      "weekLabel": "Week 20 – 03 Dec 2025",
+      "weekStartDate": "2025-12-03",
+      "totalUsdcAmount": 12433,
+      "totalUniqueUsers": 1945
+    },
+    {
+      "weekNumber": 19,
+      "weekLabel": "Week 19 – 26 Nov 2025",
+      "weekStartDate": "2025-11-26",
+      "totalUsdcAmount": 12708,
+      "totalUniqueUsers": 1950
+    },
+    {
+      "weekNumber": 18,
+      "weekLabel": "Week 18 – 19 Nov 2025",
+      "weekStartDate": "2025-11-19",
+      "totalUsdcAmount": 12562,
+      "totalUniqueUsers": 1948
+    },
+    {
+      "weekNumber": 17,
+      "weekLabel": "Week 17 – 12 Nov 2025",
+      "weekStartDate": "2025-11-12",
+      "totalUsdcAmount": 12514,
+      "totalUniqueUsers": 1951
+    },
+    {
+      "weekNumber": 15,
+      "weekLabel": "Week 15 – 29 Oct 2025",
+      "weekStartDate": "2025-10-29",
+      "totalUsdcAmount": 23154,
+      "totalUniqueUsers": 3324
+    },
+    {
+      "weekNumber": 14,
+      "weekLabel": "Week 14 – 22 Oct 2025",
+      "weekStartDate": "2025-10-22",
+      "totalUsdcAmount": 23123,
+      "totalUniqueUsers": 3334
+    },
+    {
+      "weekNumber": 13,
+      "weekLabel": "Week 13 – 15 Oct 2025",
+      "weekStartDate": "2025-10-15",
+      "totalUsdcAmount": 27168,
+      "totalUniqueUsers": 3367
+    },
+    {
+      "weekNumber": 12,
+      "weekLabel": "Week 12 – 08 Oct 2025",
+      "weekStartDate": "2025-10-08",
+      "totalUsdcAmount": 23308,
+      "totalUniqueUsers": 3363
+    },
+    {
+      "weekNumber": 11,
+      "weekLabel": "Week 11 – 01 Oct 2025",
+      "weekStartDate": "2025-10-01",
+      "totalUsdcAmount": 23411,
+      "totalUniqueUsers": 3378
+    },
+    {
+      "weekNumber": 10,
+      "weekLabel": "Week 10 – 24 Sep 2025",
+      "weekStartDate": "2025-09-24",
+      "totalUsdcAmount": 23462,
+      "totalUniqueUsers": 3357
+    },
+    {
+      "weekNumber": 9,
+      "weekLabel": "Week 9 – 17 Sep 2025",
+      "weekStartDate": "2025-09-17",
+      "totalUsdcAmount": 23445,
+      "totalUniqueUsers": 3389
+    },
+    {
+      "weekNumber": 8,
+      "weekLabel": "Week 8 – 10 Sep 2025",
+      "weekStartDate": "2025-09-10",
+      "totalUsdcAmount": 23908,
+      "totalUniqueUsers": 3363
+    },
+    {
+      "weekNumber": 7,
+      "weekLabel": "Week 7 – 03 Sep 2025",
+      "weekStartDate": "2025-09-03",
+      "totalUsdcAmount": 12997,
+      "totalUniqueUsers": 3205
+    },
+    {
+      "weekNumber": 6,
+      "weekLabel": "Week 6 – 27 Aug 2025",
+      "weekStartDate": "2025-08-27",
+      "totalUsdcAmount": 12904,
+      "totalUniqueUsers": 3128
+    },
+    {
+      "weekNumber": 5,
+      "weekLabel": "Week 5 – 20 Aug 2025",
+      "weekStartDate": "2025-08-20",
+      "totalUsdcAmount": 12909,
+      "totalUniqueUsers": 3116
+    },
+    {
+      "weekNumber": 3,
+      "weekLabel": "Week 3 – 06 Aug 2025",
+      "weekStartDate": "2025-08-06",
+      "totalUsdcAmount": 13242,
+      "totalUniqueUsers": 3118
+    },
+    {
+      "weekNumber": 2,
+      "weekLabel": "Week 2 – 30 Jul 2025",
+      "weekStartDate": "2025-07-30",
+      "totalUsdcAmount": 12472,
+      "totalUniqueUsers": 2985
+    },
+    {
+      "weekNumber": 1,
+      "weekLabel": "Week 1 – 23 Jul 2025",
+      "weekStartDate": "2025-07-23",
+      "totalUsdcAmount": 11461,
+      "totalUniqueUsers": 2893
+    }
+  ],
+  "meta": {
+    "updatedAt": "2026-01-16T10:43:22.841Z",
+    "source": "base-rpc",
+    "startBlock": 33259888,
+    "latestBlock": 40883953
+  }
+}

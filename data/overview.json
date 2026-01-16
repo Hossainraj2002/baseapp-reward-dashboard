@@ -1,0 +1,18 @@
+{
+  "allTime": {
+    "totalUsdcDistributed": 391963,
+    "totalUniqueUsers": 16038
+  },
+  "latestWeek": {
+    "weekNumber": 26,
+    "weekStartDate": "2026-01-14",
+    "totalUsdcDistributed": 12544,
+    "uniqueUsers": 1956
+  },
+  "meta": {
+    "updatedAt": "2026-01-16T10:43:22.841Z",
+    "source": "base-rpc",
+    "startBlock": 33259888,
+    "latestBlock": 40883953
+  }
+}

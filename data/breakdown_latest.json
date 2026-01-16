@@ -1,0 +1,41 @@
+{
+  "items": [
+    {
+      "rewardAmount": 100,
+      "userCount": 5
+    },
+    {
+      "rewardAmount": 50,
+      "userCount": 18
+    },
+    {
+      "rewardAmount": 25,
+      "userCount": 49
+    },
+    {
+      "rewardAmount": 17,
+      "userCount": 1
+    },
+    {
+      "rewardAmount": 10,
+      "userCount": 98
+    },
+    {
+      "rewardAmount": 5,
+      "userCount": 1784
+    },
+    {
+      "rewardAmount": 2,
+      "userCount": 1
+    }
+  ],
+  "totals": {
+    "rewardedUsers": 1956
+  },
+  "meta": {
+    "updatedAt": "2026-01-16T10:43:22.841Z",
+    "source": "base-rpc",
+    "startBlock": 33259888,
+    "latestBlock": 40883953
+  }
+}
