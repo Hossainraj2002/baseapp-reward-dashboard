@@ -1,21 +1,13 @@
-import path from "path";
+import type { NextConfig } from "next";
 
-const config = {
-  webpack: (webpackConfig: any) => {
-    webpackConfig.externals = webpackConfig.externals || [];
-    webpackConfig.externals.push("pino-pretty", "lokijs", "encoding");
+const nextConfig = {
+  turbopack: {},
 
-    webpackConfig.resolve = webpackConfig.resolve || {};
-    webpackConfig.resolve.alias = {
-      ...(webpackConfig.resolve.alias || {}),
-      "@react-native-async-storage/async-storage": path.resolve(
-        process.cwd(),
-        "shims/async-storage.ts"
-      ),
-    };
-
-    return webpackConfig;
+  webpack: (config: any) => {
+    config.externals = config.externals || [];
+    config.externals.push("pino-pretty", "lokijs", "encoding");
+    return config;
   },
-};
+} satisfies NextConfig;
 
-export default config;
+export default nextConfig;
