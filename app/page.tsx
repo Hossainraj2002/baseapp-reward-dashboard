@@ -2,21 +2,24 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { usePathname, useRouter } from "next/navigation";
-import { ConnectWallet, Wallet } from "@coinbase/onchainkit/wallet";
-import { Avatar, Name } from "@coinbase/onchainkit/identity";
-import { Connected } from "@coinbase/onchainkit";
+import { useRouter } from "next/navigation";
+import CreatorFooter from "./_components/CreatorFooter";
 
 type OverviewResponse = {
   allTime: { totalUsdcDistributed: number; totalUniqueUsers: number };
-  latestWeek: { totalUsdcDistributed: number; uniqueUsers: number };
-  meta: { updatedAt: string; source: "dune" };
+  latestWeek: {
+    weekNumber: number;
+    weekStartDate: string | null;
+    totalUsdcDistributed: number;
+    uniqueUsers: number;
+  };
+  meta: { updatedAt: string; source: string };
 };
 
 type BreakdownResponse = {
   items: { rewardAmount: number; userCount: number }[];
   totals: { rewardedUsers: number };
-  meta: { updatedAt: string; source: "dune" };
+  meta: { updatedAt: string; source: string };
 };
 
 type WeeklyLbRow = {
@@ -31,25 +34,10 @@ type WeeklyLbResponse = {
   rows: WeeklyLbRow[];
   meta: {
     updatedAt: string;
-    source: "dune" | "dune+neynar";
+    source: string;
     limit: number;
     offset: number;
     hasMore: boolean;
-  };
-};
-
-type MeResponse = {
-  viewer: {
-    hasViewerContext: boolean;
-    address: `0x${string}` | null;
-    fid: number | null;
-    username: string | null;
-    displayName: string | null;
-    pfpUrl: string | null;
-  };
-  rewards: {
-    allTimeUsdc: number;
-    latestWeekUsdc: number;
   };
 };
 
@@ -64,106 +52,77 @@ function shortAddr(a: string) {
   return `${a.slice(0, 6)}…${a.slice(-4)}`;
 }
 
-function NavButton({
-  active,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`navBtn ${active ? "navBtnActive" : ""}`}
-    >
-      {label}
-    </button>
-  );
-}
-
 export default function Home() {
   const router = useRouter();
-  const pathname = usePathname();
 
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [breakdown, setBreakdown] = useState<BreakdownResponse | null>(null);
   const [weekly, setWeekly] = useState<WeeklyLbResponse | null>(null);
-  const [me, setMe] = useState<MeResponse | null>(null);
 
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(0); // 0-based
+  const [page, setPage] = useState(0);
   const limit = 10;
 
   const [loading, setLoading] = useState({
     overview: true,
     breakdown: true,
     weekly: true,
-    me: true,
   });
 
   const [error, setError] = useState<string>("");
 
-  const offset = useMemo(() => page * limit, [page]);
+  const offset = useMemo(() => page * limit, [page, limit]);
 
-  // Load viewer (wallet / fid context + earnings)
+  // Overview
   useEffect(() => {
-    (async () => {
-      try {
-        setLoading((s) => ({ ...s, me: true }));
-        const res = await fetch("/api/me", { cache: "no-store" });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json?.error ?? "Failed to load viewer");
-        setMe(json);
-      } catch {
-        // do not hard-fail the whole page for this
-      } finally {
-        setLoading((s) => ({ ...s, me: false }));
-      }
-    })();
-  }, []);
-
-  // overview
-  useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         setLoading((s) => ({ ...s, overview: true }));
         const res = await fetch("/api/overview", { cache: "no-store" });
-        const json = await res.json();
+        const json = (await res.json()) as OverviewResponse & { error?: string };
         if (!res.ok) throw new Error(json?.error ?? "Failed to load overview");
-        setOverview(json);
+        if (!cancelled) setOverview(json);
       } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : "Failed to load overview");
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load overview");
       } finally {
-        setLoading((s) => ({ ...s, overview: false }));
+        if (!cancelled) setLoading((s) => ({ ...s, overview: false }));
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // breakdown
+  // Breakdown
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         setLoading((s) => ({ ...s, breakdown: true }));
         const res = await fetch("/api/breakdown/latest", { cache: "no-store" });
-        const json = await res.json();
+        const json = (await res.json()) as BreakdownResponse & { error?: string };
         if (!res.ok) throw new Error(json?.error ?? "Failed to load breakdown");
-        setBreakdown(json);
+        if (!cancelled) setBreakdown(json);
       } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : "Failed to load breakdown");
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load breakdown");
       } finally {
-        setLoading((s) => ({ ...s, breakdown: false }));
+        if (!cancelled) setLoading((s) => ({ ...s, breakdown: false }));
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // weekly leaderboard
+  // Weekly leaderboard (Top 10, paginated)
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         setLoading((s) => ({ ...s, weekly: true }));
+
         const qs = new URLSearchParams({
           limit: String(limit),
           offset: String(offset),
@@ -173,118 +132,74 @@ export default function Home() {
         const res = await fetch(`/api/leaderboard/weekly?${qs.toString()}`, {
           cache: "no-store",
         });
-        const json = await res.json();
-        if (!res.ok)
-          throw new Error(json?.error ?? "Failed to load leaderboard");
-        setWeekly(json);
+
+        const json = (await res.json()) as WeeklyLbResponse & { error?: string };
+        if (!res.ok) throw new Error(json?.error ?? "Failed to load leaderboard");
+
+        if (!cancelled) setWeekly(json);
       } catch (e: unknown) {
-        setError(
-          e instanceof Error ? e.message : "Failed to load leaderboard"
-        );
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load leaderboard");
       } finally {
-        setLoading((s) => ({ ...s, weekly: false }));
+        if (!cancelled) setLoading((s) => ({ ...s, weekly: false }));
       }
     })();
-  }, [offset, search]);
+    return () => {
+      cancelled = true;
+    };
+  }, [offset, search, limit]);
 
   function onSearchSubmit(e: React.FormEvent) {
     e.preventDefault();
     setPage(0);
-    setSearch(search.trim());
+    setSearch(searchInput.trim().toLowerCase());
   }
 
-  // You can later wire this from /api/weeks
-  const weekLabel = "Latest week";
-
-  const viewerAllTime = me?.rewards?.allTimeUsdc ?? 0;
+  const weekLabel = overview?.latestWeek?.weekNumber
+    ? `Week ${overview.latestWeek.weekNumber}`
+    : "Latest week";
 
   return (
     <div className="wrap">
       <div className="header">
-        <div className="leftHead">
-          <div className="brand">
-            {/* Put your logo in: public/logo.png */}
-            <div className="logo">
-              <Image
-                src="/logo.png"
-                alt="Logo"
-                width={28}
-                height={28}
-                style={{ borderRadius: 8 }}
-                onError={(e) => {
-                  // If logo not added yet, hide it safely
-                  (e.currentTarget as HTMLImageElement).style.display = "none";
-                }}
-              />
-            </div>
-            <div>
-              <div className="title">Creator Reward</div>
-              <div className="subtitle">Rewards for posting</div>
-            </div>
+        <div className="brand">
+          <div className="logo">
+            <Image src="/logo.png" alt="Logo" width={28} height={28} />
+          </div>
+          <div>
+            <div className="title">Baseapp Reward Dashboard</div>
+            <div className="subtitle">Rewards snapshot (cached onchain)</div>
           </div>
         </div>
 
-        <div className="rightHead">
-          <div className="weekPill">{weekLabel}</div>
-
-          {/* Wallet + Identity pill */}
-          <div className="identityPill">
-            <Connected
-              connecting={<div className="miniText">Connecting…</div>}
-              fallback={
-                <Wallet>
-                  <ConnectWallet className="connectBtn">
-                    Connect
-                  </ConnectWallet>
-                </Wallet>
-              }
-            >
-              <Wallet>
-                <ConnectWallet className="connectedBtn">
-                  <Avatar className="ocAvatar" />
-                  <Name className="ocName" />
-                  <span className="earnChip">{usdc(viewerAllTime)}</span>
-                </ConnectWallet>
-              </Wallet>
-            </Connected>
-          </div>
-        </div>
+        <div className="weekPill">{weekLabel}</div>
       </div>
 
       {error ? <div className="error">{error}</div> : null}
 
-      {/* KPI Cards */}
+      {/* KPI cards */}
       <div className="grid">
         <div className="card">
           <div className="label">All-time USDC</div>
           <div className="value">
-            {loading.overview
-              ? "…"
-              : usdc(overview?.allTime.totalUsdcDistributed ?? 0)}
+            {loading.overview ? "…" : usdc(overview?.allTime.totalUsdcDistributed ?? 0)}
           </div>
         </div>
 
         <div className="card">
           <div className="label">All-time users</div>
-          <div className="value">
-            {loading.overview ? "…" : nf(overview?.allTime.totalUniqueUsers ?? 0)}
-          </div>
+          <div className="value">{loading.overview ? "…" : nf(overview?.allTime.totalUniqueUsers ?? 0)}</div>
         </div>
 
         <div className="card">
           <div className="label">This week USDC</div>
           <div className="value">
-            {loading.overview
-              ? "…"
-              : usdc(overview?.latestWeek.totalUsdcDistributed ?? 0)}
+            {loading.overview ? "…" : usdc(overview?.latestWeek.totalUsdcDistributed ?? 0)}
           </div>
         </div>
 
         <div className="card">
           <div className="label">This week users</div>
-          <div className="value">
-            {loading.overview ? "…" : nf(overview?.latestWeek.uniqueUsers ?? 0)}
-          </div>
+          <div className="value">{loading.overview ? "…" : nf(overview?.latestWeek.uniqueUsers ?? 0)}</div>
         </div>
       </div>
 
@@ -293,18 +208,14 @@ export default function Home() {
         <div className="sectionHeader">
           <div className="sectionTitle">Current week breakdown</div>
           <div className="sectionMeta">
-            {loading.breakdown
-              ? "Loading…"
-              : `${nf(breakdown?.totals.rewardedUsers ?? 0)} rewarded users`}
+            {loading.breakdown ? "Loading…" : `${nf(breakdown?.totals.rewardedUsers ?? 0)} rewarded users`}
           </div>
         </div>
 
         <div className="breakdown">
           {(breakdown?.items ?? []).map((it) => (
             <div key={it.rewardAmount} className="breakRow">
-              <div className="breakLeft">
-                <span className="badge">{usdc(it.rewardAmount)}</span>
-              </div>
+              <div className="badge">{usdc(it.rewardAmount)}</div>
               <div className="breakRight">{nf(it.userCount)} users</div>
             </div>
           ))}
@@ -315,19 +226,21 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Weekly leaderboard (Top 10) */}
+      {/* Weekly leaderboard */}
       <div className="section">
         <div className="sectionHeader">
-          <div className="sectionTitle">Rewards for posting</div>
+          <div className="sectionTitle">Weekly leaderboard</div>
           <div className="sectionMeta">Top {limit}</div>
         </div>
+
+        <div className="hint">Click any user address to visit user profile.</div>
 
         <form className="search" onSubmit={onSearchSubmit}>
           <input
             className="searchInput"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by address"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search by address (0x...)"
           />
           <button className="searchBtn" type="submit">
             Search
@@ -347,9 +260,9 @@ export default function Home() {
             (weekly?.rows ?? []).map((r) => (
               <button
                 type="button"
-                className="trow trowBtn"
+                className="trow"
                 key={`${r.rank}-${r.user.address}`}
-                onClick={() => router.push(`/user/${r.user.address}`)}
+                onClick={() => router.push(`/find/${r.user.address}`)}
               >
                 <div className="rank">{r.rank}</div>
                 <div className="user">{shortAddr(r.user.address)}</div>
@@ -358,61 +271,25 @@ export default function Home() {
             ))
           )}
 
-          {!loading.weekly && (weekly?.rows?.length ?? 0) === 0 ? (
-            <div className="muted">No results.</div>
-          ) : null}
+          {!loading.weekly && (weekly?.rows?.length ?? 0) === 0 ? <div className="muted">No results.</div> : null}
         </div>
 
         <div className="pager">
-          <button
-            className="pagerBtn"
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-            disabled={page === 0}
-            type="button"
-          >
+          <button className="pagerBtn" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0} type="button">
             Prev
           </button>
 
           <div className="pagerMid">Page {page + 1}</div>
 
-          <button
-            className="pagerBtn"
-            onClick={() => setPage((p) => p + 1)}
-            disabled={!weekly?.meta?.hasMore}
-            type="button"
-          >
+          <button className="pagerBtn" onClick={() => setPage((p) => p + 1)} disabled={!weekly?.meta?.hasMore} type="button">
             Next
           </button>
         </div>
       </div>
 
-      <div className="foot">
-        Data: Dune now. Farcaster social (FID) loads on /me once Mini App context
-        is available.
-      </div>
-
-      {/* Bottom Navigation Bar */}
-      <div className="bottomNav">
-        <NavButton
-          active={pathname === "/"}
-          label="Home"
-          onClick={() => router.push("/")}
-        />
-        <NavButton
-          active={pathname === "/weekly"}
-          label="Weekly"
-          onClick={() => router.push("/weekly")}
-        />
-        <NavButton
-          active={pathname === "/alltime"}
-          label="All-time"
-          onClick={() => router.push("/alltime")}
-        />
-        <NavButton
-          active={pathname === "/me"}
-          label="Me"
-          onClick={() => router.push("/me")}
-        />
+      {/* subtle creator + tip */}
+      <div style={{ marginTop: 14 }}>
+        <CreatorFooter />
       </div>
 
       <style jsx>{`
@@ -420,11 +297,10 @@ export default function Home() {
           max-width: 420px;
           margin: 0 auto;
           padding: 14px;
-          padding-bottom: 88px;
+          padding-bottom: 88px; /* leave room for BottomNav from layout */
           background: #ffffff;
           color: #0f172a;
-          font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
-            Arial;
+          font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
         }
 
         .header {
@@ -445,6 +321,7 @@ export default function Home() {
           display: flex;
           align-items: center;
           gap: 10px;
+          min-width: 0;
         }
 
         .logo {
@@ -454,25 +331,25 @@ export default function Home() {
           overflow: hidden;
           border: 1px solid #e2e8f0;
           background: #fff;
+          flex: 0 0 auto;
         }
 
         .title {
-          font-size: 18px;
+          font-size: 16px;
           font-weight: 900;
           letter-spacing: -0.2px;
           line-height: 1.1;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 240px;
         }
+
         .subtitle {
           font-size: 12px;
           color: #64748b;
           margin-top: 2px;
           font-weight: 700;
-        }
-
-        .rightHead {
-          display: flex;
-          align-items: center;
-          gap: 8px;
         }
 
         .weekPill {
@@ -483,65 +360,7 @@ export default function Home() {
           font-size: 12px;
           font-weight: 800;
           white-space: nowrap;
-        }
-
-        .identityPill {
-          display: flex;
-          align-items: center;
-        }
-
-        :global(.connectBtn) {
-          border: 1px solid #1d4ed8;
-          background: #ffffff;
-          color: #1d4ed8;
-          font-weight: 900;
-          padding: 8px 10px;
-          border-radius: 999px;
-          font-size: 12px;
-        }
-
-        :global(.connectedBtn) {
-          border: 1px solid #e2e8f0;
-          background: #ffffff;
-          color: #0f172a;
-          font-weight: 900;
-          padding: 6px 8px;
-          border-radius: 999px;
-          font-size: 12px;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        :global(.ocAvatar) {
-          width: 22px !important;
-          height: 22px !important;
-          border-radius: 999px !important;
-        }
-
-        :global(.ocName) {
-          font-weight: 900 !important;
-          font-size: 12px !important;
-          max-width: 92px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .earnChip {
-          background: #eff6ff;
-          border: 1px solid #dbeafe;
-          color: #1d4ed8;
-          padding: 4px 8px;
-          border-radius: 999px;
-          font-weight: 900;
-          font-size: 12px;
-        }
-
-        .miniText {
-          font-size: 12px;
-          color: #64748b;
-          font-weight: 700;
+          flex: 0 0 auto;
         }
 
         .error {
@@ -579,7 +398,7 @@ export default function Home() {
         }
 
         .value {
-          font-size: 22px;
+          font-size: 20px;
           font-weight: 900;
           margin-top: 8px;
         }
@@ -598,15 +417,24 @@ export default function Home() {
           justify-content: space-between;
           gap: 12px;
         }
+
         .sectionTitle {
           font-size: 14px;
           font-weight: 900;
         }
+
         .sectionMeta {
           font-size: 12px;
           color: #1d4ed8;
           font-weight: 900;
           white-space: nowrap;
+        }
+
+        .hint {
+          margin-top: 6px;
+          font-size: 12px;
+          color: #64748b;
+          font-weight: 700;
         }
 
         .breakdown {
@@ -615,6 +443,7 @@ export default function Home() {
           flex-direction: column;
           gap: 8px;
         }
+
         .breakRow {
           display: flex;
           align-items: center;
@@ -624,6 +453,7 @@ export default function Home() {
           border: 1px solid #e2e8f0;
           background: #ffffff;
         }
+
         .badge {
           background: #eff6ff;
           color: #1d4ed8;
@@ -633,6 +463,7 @@ export default function Home() {
           font-size: 12px;
           border: 1px solid #dbeafe;
         }
+
         .breakRight {
           font-size: 12px;
           color: #0f172a;
@@ -644,6 +475,7 @@ export default function Home() {
           display: flex;
           gap: 8px;
         }
+
         .searchInput {
           flex: 1;
           border: 1px solid #e2e8f0;
@@ -652,10 +484,12 @@ export default function Home() {
           font-size: 13px;
           outline: none;
         }
+
         .searchInput:focus {
           border-color: #1d4ed8;
           box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.12);
         }
+
         .searchBtn {
           border: 1px solid #1d4ed8;
           background: #1d4ed8;
@@ -669,6 +503,7 @@ export default function Home() {
         .table {
           margin-top: 10px;
         }
+
         .thead {
           display: grid;
           grid-template-columns: 42px 1fr 90px;
@@ -689,16 +524,12 @@ export default function Home() {
           border-top: 1px solid #e2e8f0;
           font-size: 13px;
           background: transparent;
-          border-left: none;
-          border-right: none;
-          border-bottom: none;
+          border: none;
           text-align: left;
-        }
-
-        .trowBtn {
           cursor: pointer;
         }
-        .trowBtn:active {
+
+        .trow:active {
           opacity: 0.7;
         }
 
@@ -706,12 +537,15 @@ export default function Home() {
           font-weight: 900;
           color: #1d4ed8;
         }
+
         .user {
           font-weight: 900;
         }
+
         .right {
           text-align: right;
         }
+
         .strong {
           font-weight: 900;
         }
@@ -723,6 +557,7 @@ export default function Home() {
           justify-content: space-between;
           gap: 10px;
         }
+
         .pagerBtn {
           border: 1px solid #e2e8f0;
           background: #ffffff;
@@ -731,9 +566,11 @@ export default function Home() {
           font-size: 13px;
           font-weight: 900;
         }
+
         .pagerBtn:disabled {
           opacity: 0.5;
         }
+
         .pagerMid {
           font-size: 12px;
           color: #64748b;
@@ -745,47 +582,6 @@ export default function Home() {
           font-size: 12px;
           color: #64748b;
           font-weight: 700;
-        }
-
-        .foot {
-          margin: 14px 0 8px;
-          text-align: center;
-          font-size: 11px;
-          color: #64748b;
-          font-weight: 700;
-        }
-
-        .bottomNav {
-          position: fixed;
-          left: 50%;
-          transform: translateX(-50%);
-          bottom: 10px;
-          width: min(420px, calc(100vw - 24px));
-          background: #1d4ed8;
-          border-radius: 18px;
-          padding: 10px;
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 8px;
-          box-shadow: 0 10px 30px rgba(2, 6, 23, 0.18);
-          z-index: 50;
-        }
-
-        .navBtn {
-          border: 1px solid rgba(255, 255, 255, 0.22);
-          background: rgba(255, 255, 255, 0.12);
-          color: #ffffff;
-          font-weight: 900;
-          padding: 10px 10px;
-          border-radius: 14px;
-          font-size: 12px;
-          letter-spacing: 0.2px;
-        }
-
-        .navBtnActive {
-          background: #ffffff;
-          color: #1d4ed8;
-          border-color: #ffffff;
         }
       `}</style>
     </div>
