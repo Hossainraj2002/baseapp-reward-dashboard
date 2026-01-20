@@ -10,17 +10,13 @@ export default function RootProvider({ children }: { children: React.ReactNode }
   return (
     <OnchainKitProvider
       chain={base}
+      // MiniKit hooks (useMiniKit, ready) require this enabled flag.
+      // No API key required for basic MiniKit operation.
       miniKit={{ enabled: true }}
-      // No apiKey needed for MiniKit hooks like useMiniKit/ready.
-      // We are keeping this FREE-only and stable.
+      // Do NOT add unsupported props like `wallet` here.
+      // OnchainKit wallet behavior is configured under `config` (optional).
     >
-      <div
-        style={{
-          minHeight: '100vh',
-          background: '#ffffff',
-        }}
-      >
-        {/* Mobile-first app container */}
+      <div style={{ minHeight: '100vh', background: '#ffffff' }}>
         <div
           style={{
             maxWidth: 420,
@@ -31,7 +27,6 @@ export default function RootProvider({ children }: { children: React.ReactNode }
           {children}
         </div>
 
-        {/* Always-on bottom navigation */}
         <BottomNav />
       </div>
     </OnchainKitProvider>
