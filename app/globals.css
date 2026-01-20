@@ -1,0 +1,128 @@
+:root {
+  /* Key brand colors (LOCKED) */
+  --deep-blue: #0000ff;
+  --light-blue: #a5d2ff;
+
+  /* Page background */
+  --bg: #ffffff;
+
+  /* Text on white */
+  --text: #0a0a0a;
+  --muted: #6b7280;
+
+  /* Card + borders on white */
+  --card-border: rgba(10, 10, 10, 0.10);
+  --divider: rgba(10, 10, 10, 0.08);
+
+  /* Buttons */
+  --btn-border: var(--deep-blue);
+  --btn-text: var(--deep-blue);
+  --btn-bg: #ffffff;
+
+  /* Inputs */
+  --input-border: rgba(10, 10, 10, 0.16);
+  --input-bg: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: var(--deep-blue);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Basic page spacing */
+.page {
+  padding: 16px;
+}
+
+/* Headings */
+.h1 {
+  font-size: 18px;
+  font-weight: 900;
+  margin: 0;
+}
+
+.subtle {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Cards (white theme) */
+.card {
+  border: 1px solid var(--card-border);
+  background: #ffffff;
+  border-radius: 14px;
+}
+
+.card-pad {
+  padding: 12px;
+}
+
+/* Rows */
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* Inputs */
+.input {
+  width: 100%;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 12px 12px;
+  font-size: 14px;
+  outline: none;
+}
+
+.input::placeholder {
+  color: rgba(10, 10, 10, 0.45);
+}
+
+/* Buttons (outline deep blue, text deep blue) */
+.btn {
+  border: 1px solid var(--btn-border);
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: rgba(0, 0, 255, 0.06);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+/* Button active (deep blue fill => white bold text) */
+.btnPrimary {
+  border: 1px solid var(--deep-blue);
+  background: var(--deep-blue);
+  color: #ffffff;
+  font-weight: 900;
+}
