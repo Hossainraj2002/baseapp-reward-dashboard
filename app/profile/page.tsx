@@ -2,6 +2,7 @@ import FrameReady from '../../components/FrameReady';
 import CopyIconButton from '../../components/CopyIconButton';
 import fs from 'fs';
 import path from 'path';
+import Link from 'next/link';
 
 const DEEP_BLUE = '#0000FF';
 const LIGHT_BLUE = '#A5D2FF';
@@ -97,7 +98,15 @@ export default function ProfilePage({
       : [];
 
   return (
-    <main style={{ maxWidth: 420, margin: '0 auto', padding: 16, paddingBottom: 28, background: '#FFFFFF' }}>
+    <main
+      style={{
+        maxWidth: 420,
+        margin: '0 auto',
+        padding: 16,
+        paddingBottom: 28,
+        background: '#FFFFFF',
+      }}
+    >
       <FrameReady />
 
       {/* Header */}
@@ -123,7 +132,9 @@ export default function ProfilePage({
           <div style={{ fontSize: 13, color: '#000000', opacity: 0.85, marginBottom: 12 }}>
             Go to Find, paste a wallet address, then open it.
           </div>
-          <a
+
+          {/* FIX: internal navigation must use Link */}
+          <Link
             href="/find"
             style={{
               display: 'block',
@@ -138,7 +149,7 @@ export default function ProfilePage({
             }}
           >
             Open Find
-          </a>
+          </Link>
         </Card>
       ) : (
         <>
@@ -241,12 +252,7 @@ export default function ProfilePage({
               x
             </a>{' '}
             |{' '}
-            <a
-              href="https://base.app/profile/akbaronchain"
-              style={linkStyle}
-              target="_blank"
-              rel="noreferrer"
-            >
+            <a href="https://base.app/profile/akbaronchain" style={linkStyle} target="_blank" rel="noreferrer">
               baseapp
             </a>
           </div>

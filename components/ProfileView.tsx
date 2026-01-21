@@ -1,4 +1,5 @@
 import React from 'react';
+import Link from 'next/link';
 
 type ProfileData = {
   address: string;
@@ -49,7 +50,7 @@ export default function ProfileView({ data }: { data: ProfileData }) {
         </div>
 
         <div style={{ marginTop: 10 }}>
-          <a href="/find">Back to Find</a>
+          <Link href="/find">Back to Find</Link>
         </div>
       </div>
 
@@ -119,7 +120,9 @@ export default function ProfileView({ data }: { data: ProfileData }) {
           Support creator
         </div>
 
-        <div style={{ fontSize: 13, fontWeight: 900, wordBreak: 'break-all' }}>{data.meta.support_address}</div>
+        <div style={{ fontSize: 13, fontWeight: 900, wordBreak: 'break-all' }}>
+          {data.meta.support_address}
+        </div>
       </div>
     </div>
   );

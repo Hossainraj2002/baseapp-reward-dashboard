@@ -1,7 +1,7 @@
 import FrameReady from '@/components/FrameReady';
-import { getOverview } from '@/lib/dataFiles';
 import fs from 'fs';
 import path from 'path';
+import Link from 'next/link';
 
 type WeeklyRow = {
   week_number: number;
@@ -32,9 +32,7 @@ function formatUSDC(n: number) {
 const DEEP_BLUE = '#0000FF';
 
 export default function WeeklyOverviewPage() {
-  const overview = getOverview();
   const weekly = readWeekly();
-
   const rows = [...weekly.weeks].sort((a, b) => b.week_number - a.week_number);
 
   return (
@@ -85,7 +83,7 @@ export default function WeeklyOverviewPage() {
           const isBlue = idx % 2 === 0;
 
           return (
-            <a
+            <Link
               key={r.week_start_utc}
               href={`/weekly/${r.week_start_utc}`}
               style={{ textDecoration: 'none', color: 'inherit' }}
@@ -102,12 +100,7 @@ export default function WeeklyOverviewPage() {
                 }}
               >
                 {/* Week number */}
-                <div
-                  style={{
-                    textAlign: 'center',
-                    fontWeight: 900,
-                  }}
-                >
+                <div style={{ textAlign: 'center', fontWeight: 900 }}>
                   {r.week_number}
                 </div>
 
@@ -124,26 +117,16 @@ export default function WeeklyOverviewPage() {
                 </div>
 
                 {/* Total USDC */}
-                <div
-                  style={{
-                    textAlign: 'center',
-                    fontWeight: 900,
-                  }}
-                >
+                <div style={{ textAlign: 'center', fontWeight: 900 }}>
                   ${formatUSDC(r.total_usdc_amount)}
                 </div>
 
                 {/* Users */}
-                <div
-                  style={{
-                    textAlign: 'center',
-                    fontWeight: 800,
-                  }}
-                >
+                <div style={{ textAlign: 'center', fontWeight: 800 }}>
                   {r.total_unique_users.toLocaleString()}
                 </div>
               </div>
-            </a>
+            </Link>
           );
         })}
       </div>

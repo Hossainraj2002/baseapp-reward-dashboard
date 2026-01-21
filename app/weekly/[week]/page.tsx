@@ -2,6 +2,7 @@ import FrameReady from '../../../components/FrameReady';
 import WeeklyLeaderboardClient from '../../../components/WeeklyLeaderboardClient';
 import fs from 'fs';
 import path from 'path';
+import Link from 'next/link';
 
 type WeeklyRow = {
   week_number: number;
@@ -78,7 +79,9 @@ export default function WeeklyDetailPage({ params }: { params: { week: string } 
         <div style={{ fontSize: 16, fontWeight: 900 }}>Invalid week</div>
         <div style={{ marginTop: 8, opacity: 0.75 }}>Week must be formatted like: 2026-01-14</div>
         <div style={{ marginTop: 12 }}>
-          <a href="/weekly">Back to weekly overview</a>
+          <Link href="/weekly" style={{ color: DEEP_BLUE, fontWeight: 900, textDecoration: 'none' }}>
+            Back to weekly overview
+          </Link>
         </div>
       </main>
     );
@@ -98,7 +101,9 @@ export default function WeeklyDetailPage({ params }: { params: { week: string } 
           This week key does not exist in data/weekly.json.
         </div>
         <div style={{ marginTop: 12 }}>
-          <a href="/weekly">Back to weekly overview</a>
+          <Link href="/weekly" style={{ color: DEEP_BLUE, fontWeight: 900, textDecoration: 'none' }}>
+            Back to weekly overview
+          </Link>
         </div>
       </main>
     );
@@ -172,9 +177,7 @@ export default function WeeklyDetailPage({ params }: { params: { week: string } 
         }}
       >
         <div style={{ padding: 14, textAlign: 'center' }}>
-          <div style={{ fontSize: 20, fontWeight: 900, lineHeight: 1.2 }}>
-            {weekRow.week_label}
-          </div>
+          <div style={{ fontSize: 20, fontWeight: 900, lineHeight: 1.2 }}>{weekRow.week_label}</div>
 
           <div style={{ marginTop: 6, fontSize: 14, fontWeight: 900, opacity: 0.95 }}>
             {weekRow.week_start_utc} - {weekRow.week_end_utc}
@@ -186,7 +189,7 @@ export default function WeeklyDetailPage({ params }: { params: { week: string } 
           </div>
         </div>
 
-        <a
+        <Link
           href="/weekly"
           style={{
             display: 'block',
@@ -200,7 +203,7 @@ export default function WeeklyDetailPage({ params }: { params: { week: string } 
           }}
         >
           Back to weekly overview
-        </a>
+        </Link>
       </div>
 
       {/* TABLE */}
