@@ -48,72 +48,194 @@ function shortAddress(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-function isObject(v: unknown): v is Record<string, unknown> {
+function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
 }
 
-function getString(v: unknown): string | undefined {
+function getPath(root: unknown, path: Array<string | number>): unknown {
+  let cur: unknown = root;
+  for (const key of path) {
+    if (!isRecord(cur) && !Array.isArray(cur)) return undefined;
+
+    if (typeof key === 'number') {
+      if (!Array.isArray(cur)) return undefined;
+      cur = cur[key];
+    } else {
+      if (!isRecord(cur)) return undefined;
+      cur = cur[key];
+    }
+  }
+  return cur;
+}
+
+function asString(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
-function getNumber(v: unknown): number | undefined {
+function asNumber(v: unknown): number | undefined {
   return typeof v === 'number' ? v : undefined;
 }
 
-function findFirstAddress(candidates: Array<unknown>): string | null {
+function isEvmAddress(s: unknown): s is string {
+  const v = asString(s);
+  return !!v && /^0x[a-fA-F0-9]{40}$/.test(v);
+}
+
+function firstAddress(candidates: unknown[]): string | null {
   for (const c of candidates) {
-    const s = getString(c);
-    if (s && /^0x[a-fA-F0-9]{40}$/.test(s)) return s;
+    if (isEvmAddress(c)) return c;
   }
   return null;
 }
 
 function extractMiniIdentity(context: unknown): MiniIdentity {
-  if (!isObject(context)) return { address: null, farcaster: null };
-
-  const user = isObject(context.user) ? context.user : null;
-  const viewer = isObject(context.viewer) ? context.viewer : null;
-  const interactor = isObject(context.interactor) ? context.interactor : null;
-
-  const addr = findFirstAddress([
-    user?.address,
-    user?.custodyAddress,
-    (isObject(user?.verified_addresses) && isObject(user?.verified_addresses as unknown)) ? (user as any).verified_addresses?.eth_addresses?.[0] : undefined,
-    (isObject(user?.verifiedAddresses) && isObject(user?.verifiedAddresses as unknown)) ? (user as any).verifiedAddresses?.ethAddresses?.[0] : undefined,
-    viewer?.address,
-    (isObject(interactor?.verified_addresses) && isObject(interactor?.verified_addresses as unknown)) ? (interactor as any).verified_addresses?.eth_addresses?.[0] : undefined,
-    (isObject(interactor?.verifiedAddresses) && isObject(interactor?.verifiedAddresses as unknown)) ? (interactor as any).verifiedAddresses?.ethAddresses?.[0] : undefined
+  const address = firstAddress([
+    getPath(context, ['user', 'address']),
+    getPath(context, ['user', 'custodyAddress']),
+    getPath(context, ['user', 'custody_address']),
+    getPath(context, ['user', 'verified_addresses', 'eth_addresses', 0]),
+    getPath(context, ['user', 'verifiedAddresses', 'ethAddresses', 0]),
+    getPath(context, ['viewer', 'address']),
+    getPath(context, ['interactor', 'verified_addresses', 'eth_addresses', 0]),
+    getPath(context, ['interactor', 'verifiedAddresses', 'ethAddresses', 0]),
   ]);
 
-  // Farcaster object can live in different places depending on SDK version.
-  const fcCandidate: unknown =
-    (isObject(user) && isObject((user as Record<string, unknown>).farcaster) ? (user as Record<string, unknown>).farcaster : undefined) ??
-    (isObject(context.farcaster) ? context.farcaster : undefined);
+  const fcObj =
+    getPath(context, ['user', 'farcaster']) ??
+    getPath(context, ['farcaster']) ??
+    undefined;
 
   let farcaster: MiniIdentity['farcaster'] = null;
 
-  if (isObject(fcCandidate)) {
-    const fid = getNumber(fcCandidate.fid) ?? getNumber((fcCandidate as Record<string, unknown>).id);
-    const username = getString(fcCandidate.username);
-    const pfpUrl = getString((fcCandidate as Record<string, unknown>).pfpUrl) ?? getString((fcCandidate as Record<string, unknown>).pfp_url);
+  if (isRecord(fcObj)) {
+    const fid = asNumber(fcObj.fid) ?? asNumber(fcObj.id);
+    const username = asString(fcObj.username);
+    const pfpUrl = asString(fcObj.pfpUrl) ?? asString(fcObj.pfp_url) ?? asString(fcObj.pfp);
+
     const followers =
-      getNumber((fcCandidate as Record<string, unknown>).followers) ??
-      getNumber((fcCandidate as Record<string, unknown>).followerCount) ??
-      getNumber((fcCandidate as Record<string, unknown>).followers_count);
+      asNumber(fcObj.followers) ??
+      asNumber(fcObj.followerCount) ??
+      asNumber(fcObj.followers_count);
+
     const following =
-      getNumber((fcCandidate as Record<string, unknown>).following) ??
-      getNumber((fcCandidate as Record<string, unknown>).followingCount) ??
-      getNumber((fcCandidate as Record<string, unknown>).following_count);
+      asNumber(fcObj.following) ??
+      asNumber(fcObj.followingCount) ??
+      asNumber(fcObj.following_count);
 
     farcaster = { fid, username, pfpUrl, followers, following };
   }
 
-  return { address: addr, farcaster };
+  return { address, farcaster };
+}
+
+function Card({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        border: `2px solid ${DEEP_BLUE}`,
+        borderRadius: 18,
+        padding: 12,
+        background: '#FFFFFF',
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SectionTitle({ title, subtitle }: { title: string; subtitle?: string }) {
+  return (
+    <div style={{ marginTop: 14, marginBottom: 10 }}>
+      <div style={{ fontSize: 14, fontWeight: 900, color: '#000000' }}>{title}</div>
+      {subtitle ? (
+        <div style={{ fontSize: 12, opacity: 0.8, color: '#000000', marginTop: 3 }}>{subtitle}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function SummaryCard({ title, value, subtitle }: { title: string; value: string; subtitle?: string }) {
+  return (
+    <div
+      style={{
+        border: `2px solid ${DEEP_BLUE}`,
+        borderRadius: 16,
+        padding: 12,
+        background: LIGHT_BLUE,
+      }}
+    >
+      <div style={{ fontSize: 12, fontWeight: 900, color: DEEP_BLUE, marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 18, fontWeight: 900, color: DEEP_BLUE, lineHeight: 1.1 }}>{value}</div>
+      {subtitle ? (
+        <div style={{ fontSize: 12, fontWeight: 900, color: DEEP_BLUE, opacity: 0.9, marginTop: 6 }}>
+          {subtitle}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Pill({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div
+      style={{
+        border: `2px solid ${DEEP_BLUE}`,
+        borderRadius: 999,
+        padding: '6px 10px',
+        background: '#FFFFFF',
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+      }}
+    >
+      <div style={{ fontSize: 11, fontWeight: 900, color: DEEP_BLUE }}>{label}</div>
+      <div style={{ fontSize: 12, fontWeight: 900, color: '#000000' }}>{value}</div>
+    </div>
+  );
+}
+
+function MiniWeekCard({ title, value }: { title: string; value: string }) {
+  return (
+    <div
+      style={{
+        border: `2px solid ${DEEP_BLUE}`,
+        borderRadius: 16,
+        padding: 10,
+        background: '#FFFFFF',
+        textAlign: 'center',
+      }}
+    >
+      <div style={{ fontSize: 11, fontWeight: 900, color: DEEP_BLUE }}>{title}</div>
+      <div style={{ fontSize: 14, fontWeight: 900, color: '#000000', marginTop: 6 }}>{value}</div>
+    </div>
+  );
+}
+
+function MiniStat({ title, value }: { title: string; value: string }) {
+  return (
+    <div
+      style={{
+        border: `2px solid ${DEEP_BLUE}`,
+        borderRadius: 16,
+        padding: 12,
+        background: '#FFFFFF',
+        textAlign: 'center',
+      }}
+    >
+      <div style={{ fontSize: 11, fontWeight: 900, color: DEEP_BLUE }}>{title}</div>
+      <div style={{ fontSize: 16, fontWeight: 900, color: '#000000', marginTop: 8 }}>{value}</div>
+    </div>
+  );
 }
 
 export default function ProfileConnectedClient() {
   const { context } = useMiniKit();
+
   const mini = useMemo(() => extractMiniIdentity(context as unknown), [context]);
+
+  const miniFid = mini.farcaster?.fid ?? null;
+  const miniUsername = mini.farcaster?.username ?? null;
+  const miniPfp = mini.farcaster?.pfpUrl ?? null;
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -138,16 +260,15 @@ export default function ProfileConnectedClient() {
           const j = (await res.json().catch(() => ({}))) as { error?: string };
           throw new Error(j.error || 'Failed to load profile');
         }
-        const payload = (await res.json()) as ApiProfile;
 
-        // Prefer MiniKit username/pfp when present, else keep dataset mapping.
+        const payload = (await res.json()) as ApiProfile;
         const merged: ApiProfile = { ...payload };
 
-        if (mini.farcaster && (mini.farcaster.username || mini.farcaster.pfpUrl || mini.farcaster.fid)) {
+        if (miniUsername || miniPfp || miniFid) {
           merged.farcaster = {
-            fid: Number(mini.farcaster.fid ?? payload.farcaster?.fid ?? 0) || (payload.farcaster?.fid ?? 0),
-            username: mini.farcaster.username ?? payload.farcaster?.username ?? 'unknown',
-            pfp_url: mini.farcaster.pfpUrl ?? payload.farcaster?.pfp_url ?? null
+            fid: Number(miniFid ?? payload.farcaster?.fid ?? 0) || (payload.farcaster?.fid ?? 0),
+            username: miniUsername ?? payload.farcaster?.username ?? 'unknown',
+            pfp_url: miniPfp ?? payload.farcaster?.pfp_url ?? null,
           };
         }
 
@@ -164,7 +285,7 @@ export default function ProfileConnectedClient() {
     return () => {
       cancelled = true;
     };
-  }, [mini.address, mini.farcaster?.username, mini.farcaster?.pfpUrl, mini.farcaster?.fid]);
+  }, [mini.address, miniFid, miniUsername, miniPfp]);
 
   const header = useMemo(() => {
     if (!data) return null;
@@ -184,8 +305,9 @@ export default function ProfileConnectedClient() {
     const items = data.reward_history.map((h) => ({
       label: `Week ${h.week_number}`,
       value: `$${formatUSDC(h.usdc)}`,
-      key: h.week_start_utc
+      key: h.week_start_utc,
     }));
+
     const rows: Array<typeof items> = [];
     for (let i = 0; i < items.length; i += 3) rows.push(items.slice(i, i + 3));
     return rows;
@@ -204,7 +326,7 @@ export default function ProfileConnectedClient() {
             border: `2px solid ${DEEP_BLUE}`,
             borderRadius: 999,
             padding: '8px 10px',
-            background: '#FFFFFF'
+            background: '#FFFFFF',
           }}
         >
           Find
@@ -217,7 +339,7 @@ export default function ProfileConnectedClient() {
             No connected wallet found
           </div>
           <div style={{ fontSize: 13, color: '#000000', opacity: 0.85 }}>
-            Open this page inside Base app (Mini App viewer) so we can read your connected wallet automatically.
+            Open inside Base app so we can read your connected wallet automatically.
           </div>
         </Card>
       ) : loading ? (
@@ -253,7 +375,7 @@ export default function ProfileConnectedClient() {
                   alignItems: 'center',
                   justifyContent: 'center',
                   color: '#FFFFFF',
-                  fontWeight: 900
+                  fontWeight: 900,
                 }}
               >
                 {header.pfp ? (
@@ -302,7 +424,7 @@ export default function ProfileConnectedClient() {
           {earnedWeeksGrid.length === 0 ? (
             <Card>
               <div style={{ fontSize: 13, opacity: 0.85, color: '#000000' }}>
-                No reward history found for this wallet in the indexed dataset.
+                No reward history found for this wallet.
               </div>
             </Card>
           ) : (
@@ -344,108 +466,6 @@ export default function ProfileConnectedClient() {
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-/* UI helpers */
-
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        border: `2px solid ${DEEP_BLUE}`,
-        borderRadius: 18,
-        padding: 12,
-        background: '#FFFFFF'
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function SectionTitle({ title, subtitle }: { title: string; subtitle?: string }) {
-  return (
-    <div style={{ marginTop: 14, marginBottom: 10 }}>
-      <div style={{ fontSize: 14, fontWeight: 900, color: '#000000' }}>{title}</div>
-      {subtitle ? (
-        <div style={{ fontSize: 12, opacity: 0.8, color: '#000000', marginTop: 3 }}>{subtitle}</div>
-      ) : null}
-    </div>
-  );
-}
-
-function SummaryCard({ title, value, subtitle }: { title: string; value: string; subtitle?: string }) {
-  return (
-    <div
-      style={{
-        border: `2px solid ${DEEP_BLUE}`,
-        borderRadius: 16,
-        padding: 12,
-        background: LIGHT_BLUE
-      }}
-    >
-      <div style={{ fontSize: 12, fontWeight: 900, color: DEEP_BLUE, marginBottom: 6 }}>{title}</div>
-      <div style={{ fontSize: 18, fontWeight: 900, color: DEEP_BLUE, lineHeight: 1.1 }}>{value}</div>
-      {subtitle ? (
-        <div style={{ fontSize: 12, fontWeight: 900, color: DEEP_BLUE, opacity: 0.9, marginTop: 6 }}>
-          {subtitle}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function Pill({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div
-      style={{
-        border: `2px solid ${DEEP_BLUE}`,
-        borderRadius: 999,
-        padding: '6px 10px',
-        background: '#FFFFFF',
-        display: 'flex',
-        gap: 8,
-        alignItems: 'center'
-      }}
-    >
-      <div style={{ fontSize: 11, fontWeight: 900, color: DEEP_BLUE }}>{label}</div>
-      <div style={{ fontSize: 12, fontWeight: 900, color: '#000000' }}>{value}</div>
-    </div>
-  );
-}
-
-function MiniWeekCard({ title, value }: { title: string; value: string }) {
-  return (
-    <div
-      style={{
-        border: `2px solid ${DEEP_BLUE}`,
-        borderRadius: 16,
-        padding: 10,
-        background: '#FFFFFF',
-        textAlign: 'center'
-      }}
-    >
-      <div style={{ fontSize: 11, fontWeight: 900, color: DEEP_BLUE }}>{title}</div>
-      <div style={{ fontSize: 14, fontWeight: 900, color: '#000000', marginTop: 6 }}>{value}</div>
-    </div>
-  );
-}
-
-function MiniStat({ title, value }: { title: string; value: string }) {
-  return (
-    <div
-      style={{
-        border: `2px solid ${DEEP_BLUE}`,
-        borderRadius: 16,
-        padding: 12,
-        background: '#FFFFFF',
-        textAlign: 'center'
-      }}
-    >
-      <div style={{ fontSize: 11, fontWeight: 900, color: DEEP_BLUE }}>{title}</div>
-      <div style={{ fontSize: 16, fontWeight: 900, color: '#000000', marginTop: 8 }}>{value}</div>
     </div>
   );
 }
