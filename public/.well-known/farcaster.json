@@ -7,18 +7,18 @@
   "miniapp": {
     "version": "1",
     "name": "Baseapp Reward Dashboard",
-    "homeUrl": "https://REPLACE_WITH_YOUR_DOMAIN.vercel.app/",
-    "iconUrl": "https://REPLACE_WITH_YOUR_DOMAIN.vercel.app/icon.png",
-    "splashImageUrl": "https://REPLACE_WITH_YOUR_DOMAIN.vercel.app/splash.png",
+    "homeUrl": "https://baseapp-reward-dashboard.vercel.app/",
+    "iconUrl": "https://baseapp-reward-dashboard.vercel.app/icon.png",
+    "splashImageUrl": "https://baseapp-reward-dashboard.vercel.app/splash.png",
     "splashBackgroundColor": "#0000FF",
     "primaryCategory": "finance",
     "tags": ["base", "rewards", "usdc", "leaderboard", "analytics"],
     "tagline": "Track Base app USDC rewards",
     "subtitle": "Weekly rewards dashboard",
     "description": "A stable, cached-JSON dashboard for Base app weekly USDC rewards, with weekly and all-time leaderboards.",
-    "heroImageUrl": "https://REPLACE_WITH_YOUR_DOMAIN.vercel.app/hero.png",
+    "heroImageUrl": "https://baseapp-reward-dashboard.vercel.app/hero.png",
     "screenshotUrls": [
-      "https://REPLACE_WITH_YOUR_DOMAIN.vercel.app/screenshot.png"
+      "https://baseapp-reward-dashboard.vercel.app/screenshot.png"
     ]
   }
 }
