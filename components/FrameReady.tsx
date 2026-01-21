@@ -2,23 +2,39 @@
 
 import { useEffect } from 'react';
 
-type MiniKitLike = { ready?: () => Promise<void> | void };
+type ReadyFn = () => Promise<void> | void;
 
-function getMiniKitFromWindow(): MiniKitLike | null {
-  const w = window as unknown as Record<string, unknown>;
+// We keep it strict: no `any`, no unsafe casts.
+type MiniKitCandidate = { ready?: ReadyFn };
 
-  // Common places MiniKit can exist
-  const candidates = [
+type WindowWithMiniKit = Window &
+  typeof globalThis & {
+    MiniKit?: MiniKitCandidate;
+    miniKit?: MiniKitCandidate;
+    onchainkit?: { minikit?: MiniKitCandidate };
+    onchainKit?: { minikit?: MiniKitCandidate };
+  };
+
+function isObject(x: unknown): x is Record<string, unknown> {
+  return typeof x === 'object' && x !== null;
+}
+
+function hasReady(x: unknown): x is MiniKitCandidate {
+  return isObject(x) && typeof (x as { ready?: unknown }).ready === 'function';
+}
+
+function getMiniKitFromWindow(): MiniKitCandidate | null {
+  const w = window as WindowWithMiniKit;
+
+  const candidates: unknown[] = [
     w.MiniKit,
     w.miniKit,
-    (w.onchainkit as any)?.minikit,
-    (w.onchainKit as any)?.minikit,
+    w.onchainkit?.minikit,
+    w.onchainKit?.minikit,
   ];
 
   for (const c of candidates) {
-    if (c && typeof c === 'object' && typeof (c as MiniKitLike).ready === 'function') {
-      return c as MiniKitLike;
-    }
+    if (hasReady(c)) return c;
   }
   return null;
 }
@@ -29,23 +45,23 @@ export default function FrameReady() {
 
     async function run() {
       try {
-        console.log('[FrameReady] attempting ready()');
-
-        // 1) Try window first
+        // 1) Try window
         const fromWindow = getMiniKitFromWindow();
         if (fromWindow?.ready) {
+          console.log('[FrameReady] calling ready() via window');
           await fromWindow.ready();
           if (!cancelled) console.log('[FrameReady] ready() success via window');
           return;
         }
 
         // 2) Try importing MiniKit directly
-        const mod = (await import('@coinbase/onchainkit/minikit')) as unknown as {
-          MiniKit?: { ready?: () => Promise<void> | void };
-        };
+        console.log('[FrameReady] importing MiniKit for ready()');
+        const mod = (await import('@coinbase/onchainkit/minikit')) as unknown;
 
-        if (mod?.MiniKit?.ready) {
-          await mod.MiniKit.ready();
+        const maybe = isObject(mod) ? (mod as Record<string, unknown>).MiniKit : undefined;
+        if (hasReady(maybe)) {
+          console.log('[FrameReady] calling ready() via import');
+          await maybe.ready?.();
           if (!cancelled) console.log('[FrameReady] ready() success via import');
           return;
         }
