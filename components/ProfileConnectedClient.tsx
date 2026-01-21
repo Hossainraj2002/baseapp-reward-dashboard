@@ -1,11 +1,47 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { useMiniKit } from '@coinbase/onchainkit/minikit';
 import Link from 'next/link';
+import { useMiniKit } from '@coinbase/onchainkit/minikit';
 
 const DEEP_BLUE = '#0000FF';
 const LIGHT_BLUE = '#A5D2FF';
+
+type MiniKitFarcaster = {
+  fid?: number | string;
+  id?: number | string;
+  username?: string;
+  pfpUrl?: string;
+  pfp_url?: string;
+  pfp?: string;
+  followers?: number;
+  followerCount?: number;
+  followers_count?: number;
+  following?: number;
+  followingCount?: number;
+  following_count?: number;
+};
+
+type MiniKitUser = {
+  address?: string;
+  custodyAddress?: string;
+  custody_address?: string;
+  farcaster?: MiniKitFarcaster;
+  verified_addresses?: { eth_addresses?: string[] };
+  verifiedAddresses?: { ethAddresses?: string[] };
+};
+
+type MiniKitInteractor = {
+  verified_addresses?: { eth_addresses?: string[] };
+  verifiedAddresses?: { ethAddresses?: string[] };
+};
+
+type MiniKitContextShape = {
+  user?: MiniKitUser;
+  viewer?: { address?: string };
+  interactor?: MiniKitInteractor;
+  farcaster?: MiniKitFarcaster;
+};
 
 type ApiProfile = {
   address: string;
@@ -37,11 +73,16 @@ function shortAddress(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
+function isAddress(addr: string | undefined): addr is string {
+  return typeof addr === 'string' && /^0x[a-fA-F0-9]{40}$/.test(addr);
+}
+
 /**
  * Best-effort extraction of connected EVM address + Farcaster identity
  * from MiniKit context. The exact shape can vary across SDK versions.
+ * NOTE: no `any` allowed (Vercel build fails).
  */
-function extractFromMiniKitContext(ctx: any): {
+function extractFromMiniKitContext(ctx: MiniKitContextShape | null | undefined): {
   address: string | null;
   farcaster: { fid?: number; username?: string; pfpUrl?: string; followers?: number; following?: number } | null;
 } {
@@ -56,31 +97,32 @@ function extractFromMiniKitContext(ctx: any): {
     ctx?.interactor?.verifiedAddresses?.ethAddresses?.[0],
   ];
 
-  const addr = candidates.find((a) => typeof a === 'string' && /^0x[a-fA-F0-9]{40}$/.test(a ?? '')) ?? null;
+  const address = candidates.find((a) => isAddress(a)) ?? null;
 
-  const fc =
-    ctx?.user?.farcaster ||
-    ctx?.farcaster ||
-    ctx?.user ||
-    null;
+  const fc: MiniKitFarcaster | undefined = ctx?.user?.farcaster ?? ctx?.farcaster;
+
+  const fidRaw = fc?.fid ?? fc?.id;
+  const fidNum =
+    typeof fidRaw === 'string' ? Number(fidRaw) : typeof fidRaw === 'number' ? fidRaw : undefined;
 
   const farcaster = fc
     ? {
-        fid: fc?.fid ?? fc?.id,
-        username: fc?.username,
-        pfpUrl: fc?.pfpUrl ?? fc?.pfp_url ?? fc?.pfp,
-        followers: fc?.followers ?? fc?.followerCount ?? fc?.followers_count,
-        following: fc?.following ?? fc?.followingCount ?? fc?.following_count,
+        fid: Number.isFinite(fidNum ?? NaN) ? fidNum : undefined,
+        username: fc.username,
+        pfpUrl: fc.pfpUrl ?? fc.pfp_url ?? fc.pfp,
+        followers: fc.followers ?? fc.followerCount ?? fc.followers_count,
+        following: fc.following ?? fc.followingCount ?? fc.following_count,
       }
     : null;
 
-  return { address: addr, farcaster };
+  return { address, farcaster };
 }
 
 export default function ProfileConnectedClient() {
   const { context } = useMiniKit();
 
-  const mini = useMemo(() => extractFromMiniKitContext(context as any), [context]);
+  // `context` type from SDK can be broad; we project it into our safe shape.
+  const mini = useMemo(() => extractFromMiniKitContext(context as unknown as MiniKitContextShape), [context]);
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -102,28 +144,32 @@ export default function ProfileConnectedClient() {
       try {
         const res = await fetch(`/api/profile?address=${encodeURIComponent(mini.address)}`);
         if (!res.ok) {
-          const j = await res.json().catch(() => ({}));
-          throw new Error(j?.error || 'Failed to load profile');
+          const j: unknown = await res.json().catch(() => ({}));
+          const msg =
+            typeof j === 'object' && j && 'error' in j && typeof (j as { error?: unknown }).error === 'string'
+              ? (j as { error: string }).error
+              : 'Failed to load profile';
+          throw new Error(msg);
         }
+
         const payload = (await res.json()) as ApiProfile;
 
         // Prefer MiniKit identity if available; otherwise keep dataset mapping.
-        const merged: ApiProfile = {
-          ...payload,
-          farcaster: payload.farcaster,
-        };
+        const merged: ApiProfile = { ...payload };
 
         if (mini.farcaster?.username || mini.farcaster?.pfpUrl || mini.farcaster?.fid) {
           merged.farcaster = {
-            fid: Number(mini.farcaster?.fid ?? payload.farcaster?.fid ?? 0) || (payload.farcaster?.fid ?? 0),
+            fid:
+              (typeof mini.farcaster?.fid === 'number' ? mini.farcaster.fid : payload.farcaster?.fid ?? 0) ?? 0,
             username: mini.farcaster?.username ?? payload.farcaster?.username ?? 'unknown',
             pfp_url: mini.farcaster?.pfpUrl ?? payload.farcaster?.pfp_url ?? null,
           };
         }
 
         if (!cancelled) setData(merged);
-      } catch (e: any) {
-        if (!cancelled) setErr(e?.message || 'Unknown error');
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : 'Unknown error';
+        if (!cancelled) setErr(message);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -135,29 +181,28 @@ export default function ProfileConnectedClient() {
     };
   }, [mini.address, mini.farcaster?.username, mini.farcaster?.pfpUrl, mini.farcaster?.fid]);
 
-  // Derived UI state
   const header = useMemo(() => {
     if (!data) return null;
+
     const username = data.farcaster?.username ? `@${data.farcaster.username}` : shortAddress(data.address);
     const title = data.farcaster?.username ? data.farcaster.username : shortAddress(data.address);
     const pfp = data.farcaster?.pfp_url || null;
 
-    // MiniKit follower/following might exist; otherwise placeholder
-    const followers = (mini.farcaster?.followers ?? null) as number | null;
-    const following = (mini.farcaster?.following ?? null) as number | null;
+    const followers = mini.farcaster?.followers ?? null;
+    const following = mini.farcaster?.following ?? null;
 
     return { username, title, pfp, followers, following };
   }, [data, mini.farcaster?.followers, mini.farcaster?.following]);
 
   const earnedWeeksGrid = useMemo(() => {
     if (!data?.reward_history?.length) return [];
+
     const items = data.reward_history.map((h) => ({
       label: `Week ${h.week_number}`,
       value: `$${formatUSDC(h.usdc)}`,
       key: h.week_start_utc,
     }));
 
-    // chunk into rows of 3
     const rows: Array<typeof items> = [];
     for (let i = 0; i < items.length; i += 3) rows.push(items.slice(i, i + 3));
     return rows;
@@ -165,7 +210,6 @@ export default function ProfileConnectedClient() {
 
   return (
     <div style={{ paddingBottom: 28 }}>
-      {/* Top nav */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <div style={{ fontSize: 18, fontWeight: 900, color: '#000000' }}>Profile</div>
         <Link
@@ -184,7 +228,6 @@ export default function ProfileConnectedClient() {
         </Link>
       </div>
 
-      {/* Not connected */}
       {!mini.address ? (
         <Card>
           <div style={{ fontSize: 14, fontWeight: 900, color: '#000000', marginBottom: 6 }}>
@@ -200,15 +243,11 @@ export default function ProfileConnectedClient() {
       ) : loading ? (
         <Card>
           <div style={{ fontSize: 14, fontWeight: 900, color: '#000000' }}>Loading your profile…</div>
-          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6, color: '#000000' }}>
-            {shortAddress(mini.address)}
-          </div>
+          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6, color: '#000000' }}>{shortAddress(mini.address)}</div>
         </Card>
       ) : err ? (
         <Card>
-          <div style={{ fontSize: 14, fontWeight: 900, color: '#000000', marginBottom: 6 }}>
-            Failed to load profile
-          </div>
+          <div style={{ fontSize: 14, fontWeight: 900, color: '#000000', marginBottom: 6 }}>Failed to load profile</div>
           <div style={{ fontSize: 13, color: '#000000', opacity: 0.85 }}>{err}</div>
           <div style={{ marginTop: 12 }}>
             <Link href="/find" style={{ color: DEEP_BLUE, fontWeight: 900, textDecoration: 'none' }}>
@@ -222,7 +261,6 @@ export default function ProfileConnectedClient() {
         </Card>
       ) : (
         <>
-          {/* Identity header */}
           <Card>
             <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
               <div
@@ -248,12 +286,8 @@ export default function ProfileConnectedClient() {
               </div>
 
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 16, fontWeight: 900, color: '#000000', lineHeight: 1.1 }}>
-                  {header.title}
-                </div>
-                <div style={{ fontSize: 12, opacity: 0.85, color: '#000000', marginTop: 4 }}>
-                  {header.username}
-                </div>
+                <div style={{ fontSize: 16, fontWeight: 900, color: '#000000', lineHeight: 1.1 }}>{header.title}</div>
+                <div style={{ fontSize: 12, opacity: 0.85, color: '#000000', marginTop: 4 }}>{header.username}</div>
 
                 <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
                   <Pill label="Followers" value={header.followers ?? '—'} />
@@ -263,13 +297,16 @@ export default function ProfileConnectedClient() {
             </div>
           </Card>
 
-          {/* Onchain section */}
           <SectionTitle title="Onchain rewards" subtitle="Auto-updates when a new reward week is indexed" />
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <SummaryCard title="All-time USDC" value={`$${formatUSDC(data.reward_summary.all_time_usdc)}`} />
             <SummaryCard title="Weeks earned" value={`${data.reward_summary.total_weeks_earned}`} />
-            <SummaryCard title="Current week" value={`$${formatUSDC(data.reward_summary.latest_week_usdc)}`} subtitle={data.reward_summary.latest_week_label} />
+            <SummaryCard
+              title="Current week"
+              value={`$${formatUSDC(data.reward_summary.latest_week_usdc)}`}
+              subtitle={data.reward_summary.latest_week_label}
+            />
             <SummaryCard
               title="Previous week"
               value={`$${formatUSDC(data.reward_summary.previous_week_usdc)}`}
@@ -277,11 +314,7 @@ export default function ProfileConnectedClient() {
             />
           </div>
 
-          {/* Earned weeks grid */}
-          <SectionTitle
-            title="Winning weeks"
-            subtitle="Only weeks where you earned rewards are shown"
-          />
+          <SectionTitle title="Winning weeks" subtitle="Only weeks where you earned rewards are shown" />
 
           {earnedWeeksGrid.length === 0 ? (
             <Card>
@@ -296,18 +329,15 @@ export default function ProfileConnectedClient() {
                   {row.map((item) => (
                     <MiniWeekCard key={item.key} title={item.label} value={item.value} />
                   ))}
-                  {/* pad row to 3 cols */}
-                  {row.length < 3 ? Array.from({ length: 3 - row.length }).map((_, i) => <div key={`pad-${i}`} />) : null}
+                  {row.length < 3
+                    ? Array.from({ length: 3 - row.length }).map((_, i) => <div key={`pad-${i}`} />)
+                    : null}
                 </div>
               ))}
             </div>
           )}
 
-          {/* Social section (Phase 2 will make real) */}
-          <SectionTitle
-            title="Social engagement"
-            subtitle="Phase 2: pull Farcaster stats for the latest reward week period"
-          />
+          <SectionTitle title="Social engagement" subtitle="Phase 2: pull Farcaster stats for the latest reward week period" />
 
           <Card>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -318,22 +348,14 @@ export default function ProfileConnectedClient() {
             </div>
           </Card>
 
-          {/* Top posts placeholder */}
-          <SectionTitle
-            title="Top posts"
-            subtitle="Phase 2: show top 7 casts from the latest reward week period"
-          />
+          <SectionTitle title="Top posts" subtitle="Phase 2: show top 7 casts from the latest reward week period" />
           <Card>
             <div style={{ fontSize: 13, color: '#000000', opacity: 0.85 }}>
               Coming next. We will fetch your best 7 posts for the latest reward week window.
             </div>
           </Card>
 
-          {/* Share card placeholder */}
-          <SectionTitle
-            title="Share your data"
-            subtitle="Phase 3: generate a shareable image + post to X"
-          />
+          <SectionTitle title="Share your data" subtitle="Phase 3: generate a shareable image + post to X" />
           <Card>
             <div style={{ fontSize: 13, color: '#000000', opacity: 0.85 }}>
               Coming next. We will generate a premium image using your rewards + engagement stats and provide
@@ -341,15 +363,12 @@ export default function ProfileConnectedClient() {
             </div>
           </Card>
 
-          {/* Credits */}
           <div style={{ marginTop: 14 }}>
             <Card>
               <div style={{ fontSize: 13, color: '#000000', marginBottom: 8 }}>
                 created by <span style={{ fontWeight: 900 }}>{data.meta.created_by}</span>
               </div>
-              <div style={{ fontSize: 12, opacity: 0.8, color: '#000000', marginBottom: 6 }}>
-                Support creator
-              </div>
+              <div style={{ fontSize: 12, opacity: 0.8, color: '#000000', marginBottom: 6 }}>Support creator</div>
               <div style={{ fontSize: 13, fontWeight: 900, wordBreak: 'break-all', color: '#000000' }}>
                 {data.meta.support_address}
               </div>
@@ -402,9 +421,7 @@ function SummaryCard({ title, value, subtitle }: { title: string; value: string;
       <div style={{ fontSize: 12, fontWeight: 900, color: DEEP_BLUE, marginBottom: 6 }}>{title}</div>
       <div style={{ fontSize: 18, fontWeight: 900, color: DEEP_BLUE, lineHeight: 1.1 }}>{value}</div>
       {subtitle ? (
-        <div style={{ fontSize: 12, fontWeight: 900, color: DEEP_BLUE, opacity: 0.9, marginTop: 6 }}>
-          {subtitle}
-        </div>
+        <div style={{ fontSize: 12, fontWeight: 900, color: DEEP_BLUE, opacity: 0.9, marginTop: 6 }}>{subtitle}</div>
       ) : null}
     </div>
   );
