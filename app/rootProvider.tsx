@@ -1,27 +1,27 @@
 'use client';
 
-import { ReactNode } from 'react';
 import { OnchainKitProvider } from '@coinbase/onchainkit';
-import { base } from 'viem/chains';
+import { base } from 'wagmi/chains';
+import type { ReactNode } from 'react';
 
 export default function RootProvider({ children }: { children: ReactNode }) {
-  // IMPORTANT:
-  // Your repo uses NEXT_PUBLIC_ONCHAINKIT_API_KEY in .env
-  // If you read the wrong env var, MiniKit won't initialize and base.dev stays "Not Ready".
-  const apiKey =
-    process.env.NEXT_PUBLIC_ONCHAINKIT_API_KEY ||
-    process.env.NEXT_PUBLIC_CDP_CLIENT_API_KEY ||
-    '';
+  const apiKey = process.env.NEXT_PUBLIC_ONCHAINKIT_API_KEY ?? '';
+  const projectName = process.env.NEXT_PUBLIC_ONCHAINKIT_PROJECT_NAME ?? 'Baseapp Reward Dashboard';
+  const iconUrl = process.env.NEXT_PUBLIC_ICON_URL ?? '';
 
   return (
     <OnchainKitProvider
       apiKey={apiKey}
       chain={base}
-      // This is the critical part for Base Mini App viewer readiness
-      miniKit={{
-        enabled: true,
-        autoConnect: true,
+      config={{
+        appearance: {
+          mode: 'auto',
+          theme: 'default',
+          name: projectName,
+          logo: iconUrl,
+        },
       }}
+      miniKit={{ enabled: true }}
     >
       {children}
     </OnchainKitProvider>

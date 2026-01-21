@@ -21,7 +21,7 @@
     "screenshotUrls": ["https://baseapp-reward-dashboard.vercel.app/screenshot.png"],
     "noindex": false,
     "ogTitle": "Baseapp Reward Dashboard",
-    "ogDescription": "Track Base app USDC rewards weekly + all-time.",
+    "ogDescription": "Track Base app USDC rewards weekly and alltime.",
     "ogImageUrl": "https://baseapp-reward-dashboard.vercel.app/hero.png"
   }
 }
