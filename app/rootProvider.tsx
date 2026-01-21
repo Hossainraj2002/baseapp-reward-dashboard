@@ -1,34 +1,29 @@
 'use client';
 
-import React from 'react';
+import { ReactNode } from 'react';
 import { OnchainKitProvider } from '@coinbase/onchainkit';
 import { base } from 'viem/chains';
 
-import BottomNav from '@/components/BottomNav';
+export default function RootProvider({ children }: { children: ReactNode }) {
+  // IMPORTANT:
+  // Your repo uses NEXT_PUBLIC_ONCHAINKIT_API_KEY in .env
+  // If you read the wrong env var, MiniKit won't initialize and base.dev stays "Not Ready".
+  const apiKey =
+    process.env.NEXT_PUBLIC_ONCHAINKIT_API_KEY ||
+    process.env.NEXT_PUBLIC_CDP_CLIENT_API_KEY ||
+    '';
 
-export default function RootProvider({ children }: { children: React.ReactNode }) {
   return (
     <OnchainKitProvider
+      apiKey={apiKey}
       chain={base}
-      // MiniKit hooks (useMiniKit, ready) require this enabled flag.
-      // No API key required for basic MiniKit operation.
-      miniKit={{ enabled: true }}
-      // Do NOT add unsupported props like `wallet` here.
-      // OnchainKit wallet behavior is configured under `config` (optional).
+      // This is the critical part for Base Mini App viewer readiness
+      miniKit={{
+        enabled: true,
+        autoConnect: true,
+      }}
     >
-      <div style={{ minHeight: '100vh', background: '#ffffff' }}>
-        <div
-          style={{
-            maxWidth: 420,
-            margin: '0 auto',
-            paddingBottom: 96, // space for bottom nav
-          }}
-        >
-          {children}
-        </div>
-
-        <BottomNav />
-      </div>
+      {children}
     </OnchainKitProvider>
   );
 }
