@@ -79,7 +79,6 @@ function num(s: string) {
 export default async function FindAddressPage({
   params,
 }: {
-  // Next.js 15 expects params to be a Promise in the type system
   params: Promise<{ address: string }>;
 }) {
   const { address: addrRaw } = await params;
@@ -90,6 +89,7 @@ export default async function FindAddressPage({
         <FrameReady />
         <div style={{ fontSize: 16, fontWeight: 900 }}>Invalid address</div>
         <div style={{ marginTop: 8, opacity: 0.75 }}>Address must be formatted like 0x...</div>
+
         <div style={{ marginTop: 12 }}>
           <Link href="/find">Back to Find</Link>
         </div>

@@ -1,8 +1,8 @@
 import FrameReady from '../../components/FrameReady';
 import CopyIconButton from '../../components/CopyIconButton';
+import Link from 'next/link';
 import fs from 'fs';
 import path from 'path';
-import Link from 'next/link';
 
 const DEEP_BLUE = '#0000FF';
 const LIGHT_BLUE = '#A5D2FF';
@@ -61,12 +61,14 @@ function formatUSDC(n: number) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
-export default function ProfilePage({
+export default async function ProfilePage({
   searchParams,
 }: {
-  searchParams: { address?: string };
+  searchParams: Promise<{ address?: string }>;
 }) {
-  const addressParam = (searchParams.address ?? '').trim();
+  const { address: addressRaw } = await searchParams;
+
+  const addressParam = (addressRaw ?? '').trim();
   const address = isAddress(addressParam) ? addressParam : null;
 
   const overview = readJson<Overview>('data/overview.json');
@@ -75,7 +77,6 @@ export default function ProfilePage({
 
   const latestWeekKey = overview.latest_week.week_start_utc;
 
-  // Find this user in all-time rows
   const userRow = address
     ? allTime.rows.find((r) => r.address.toLowerCase() === address.toLowerCase())
     : null;
@@ -83,7 +84,6 @@ export default function ProfilePage({
   const allTimeTotal = userRow ? numStr(userRow.total_usdc) : 0;
   const latestWeekTotal = userRow ? numStr(userRow.weeks?.[latestWeekKey]) : 0;
 
-  // Build reward history from weekly list (latest first)
   const history =
     userRow && weekly.weeks
       ? [...weekly.weeks]
@@ -123,7 +123,7 @@ export default function ProfilePage({
         </div>
       </div>
 
-      {/* If no address, show a clean prompt */}
+      {/* If no address */}
       {!address ? (
         <Card>
           <div style={{ fontSize: 14, fontWeight: 900, color: '#000000', marginBottom: 6 }}>
@@ -133,7 +133,6 @@ export default function ProfilePage({
             Go to Find, paste a wallet address, then open it.
           </div>
 
-          {/* FIX: internal navigation must use Link */}
           <Link
             href="/find"
             style={{
@@ -183,7 +182,7 @@ export default function ProfilePage({
             </div>
           </div>
 
-          {/* Reward summary cards (light blue accents) */}
+          {/* Summary */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
             <SummaryCard title="All-time USDC" value={`$${formatUSDC(allTimeTotal)}`} />
             <SummaryCard title="Latest week USDC" value={`$${formatUSDC(latestWeekTotal)}`} />
@@ -228,7 +227,7 @@ export default function ProfilePage({
             </table>
           </div>
 
-          {/* Social stats placeholder (MiniKit later) */}
+          {/* Social stats placeholder */}
           <SectionTitle title="Social stats" subtitle="Will populate from MiniKit when enabled" />
           <Card>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -243,7 +242,7 @@ export default function ProfilePage({
         </>
       )}
 
-      {/* Creator + Support (updated style) */}
+      {/* Creator + Support */}
       <div style={{ marginTop: 14 }}>
         <Card>
           <div style={{ fontSize: 13, color: '#000000', marginBottom: 10 }}>
@@ -261,14 +260,7 @@ export default function ProfilePage({
             Support creator
           </div>
 
-          <div
-            style={{
-              display: 'flex',
-              gap: 10,
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}
-          >
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ fontSize: 13, color: '#000000', opacity: 0.9, wordBreak: 'break-all' }}>
               {SUPPORT_CREATOR_ADDRESS}
             </div>

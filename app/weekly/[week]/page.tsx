@@ -69,8 +69,12 @@ function formatUSDC(n: number) {
 
 const DEEP_BLUE = '#0000FF';
 
-export default function WeeklyDetailPage({ params }: { params: { week: string } }) {
-  const weekKey = params.week;
+export default async function WeeklyDetailPage({
+  params,
+}: {
+  params: Promise<{ week: string }>;
+}) {
+  const { week: weekKey } = await params;
 
   if (!isWeekKey(weekKey)) {
     return (
@@ -79,9 +83,7 @@ export default function WeeklyDetailPage({ params }: { params: { week: string } 
         <div style={{ fontSize: 16, fontWeight: 900 }}>Invalid week</div>
         <div style={{ marginTop: 8, opacity: 0.75 }}>Week must be formatted like: 2026-01-14</div>
         <div style={{ marginTop: 12 }}>
-          <Link href="/weekly" style={{ color: DEEP_BLUE, fontWeight: 900, textDecoration: 'none' }}>
-            Back to weekly overview
-          </Link>
+          <Link href="/weekly">Back to weekly overview</Link>
         </div>
       </main>
     );
@@ -97,13 +99,9 @@ export default function WeeklyDetailPage({ params }: { params: { week: string } 
       <main style={{ maxWidth: 420, margin: '0 auto', padding: 16 }}>
         <FrameReady />
         <div style={{ fontSize: 16, fontWeight: 900 }}>Week not found</div>
-        <div style={{ marginTop: 8, opacity: 0.75 }}>
-          This week key does not exist in data/weekly.json.
-        </div>
+        <div style={{ marginTop: 8, opacity: 0.75 }}>This week key does not exist in data/weekly.json.</div>
         <div style={{ marginTop: 12 }}>
-          <Link href="/weekly" style={{ color: DEEP_BLUE, fontWeight: 900, textDecoration: 'none' }}>
-            Back to weekly overview
-          </Link>
+          <Link href="/weekly">Back to weekly overview</Link>
         </div>
       </main>
     );
@@ -165,7 +163,7 @@ export default function WeeklyDetailPage({ params }: { params: { week: string } 
     <main style={{ maxWidth: 420, margin: '0 auto', padding: 16, paddingBottom: 28 }}>
       <FrameReady />
 
-      {/* TOP BLUE CARD (like your marked photo) */}
+      {/* TOP BLUE CARD */}
       <div
         style={{
           borderRadius: 16,
@@ -206,7 +204,6 @@ export default function WeeklyDetailPage({ params }: { params: { week: string } 
         </Link>
       </div>
 
-      {/* TABLE */}
       <WeeklyLeaderboardClient initialData={payload} />
     </main>
   );
