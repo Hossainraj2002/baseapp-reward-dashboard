@@ -36,7 +36,7 @@ export default function HomePage() {
             background: '#FFFFFF',
           }}
         />
-
+<meta name="base:app_id" content="6970f9825f24b57cc50d3331" />
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 18, fontWeight: 900, lineHeight: 1.2, color: '#0000FF' }}>
             Baseapp Reward Dashboard
