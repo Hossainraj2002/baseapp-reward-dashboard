@@ -19,7 +19,7 @@ type OverviewJson = {
 type WeeklyRow = {
   week_number: number;
   week_label: string;
-  week_start_utc: string;
+  week_start_utc: string; // YYYY-MM-DD
   week_end_utc: string;
   total_usdc_amount: number;
   total_unique_users: number;
@@ -35,9 +35,9 @@ type AllTimeRow = {
   all_time_rank: number;
   address: string;
   user_display: string;
-  total_usdc: string;
+  total_usdc: string; // decimal string
   total_weeks_earned: number;
-  weeks: Record<string, string>;
+  weeks: Record<string, string>; // weekKey -> usdc string
 };
 
 type LeaderboardAllTimeJson = {
@@ -76,23 +76,22 @@ function num(s: string) {
   return Number.isFinite(n) ? n : 0;
 }
 
-export default function FindAddressPage({ params }: { params: { address: string } }) {
-  const addrRaw = params.address;
+export default async function FindAddressPage({
+  params,
+}: {
+  // Next.js 15 expects params to be a Promise in the type system
+  params: Promise<{ address: string }>;
+}) {
+  const { address: addrRaw } = await params;
 
   if (!isAddressLike(addrRaw)) {
     return (
       <main style={{ maxWidth: 420, margin: '0 auto', padding: 16 }}>
         <FrameReady />
-
         <div style={{ fontSize: 16, fontWeight: 900 }}>Invalid address</div>
-        <div style={{ marginTop: 8, opacity: 0.75 }}>
-          Address must be formatted like 0x...
-        </div>
-
+        <div style={{ marginTop: 8, opacity: 0.75 }}>Address must be formatted like 0x...</div>
         <div style={{ marginTop: 12 }}>
-          <Link href="/find" style={{ fontWeight: 900 }}>
-            ← Back to Find
-          </Link>
+          <Link href="/find">Back to Find</Link>
         </div>
       </main>
     );
@@ -116,26 +115,21 @@ export default function FindAddressPage({ params }: { params: { address: string 
     farcasterMap = {};
   }
 
-  const user =
-    allTime.rows.find((r) => r.address.toLowerCase() === address.toLowerCase()) || null;
+  const user = allTime.rows.find((r) => r.address.toLowerCase() === address.toLowerCase()) || null;
 
   const latestWeekKey = overview.latest_week.week_start_utc;
 
   const weekMetaByKey = new Map<string, WeeklyRow>();
   for (const w of weekly.weeks) weekMetaByKey.set(w.week_start_utc, w);
 
-  const history: Array<{
-    week_start_utc: string;
-    week_label: string;
-    week_number: number;
-    usdc: number;
-  }> = [];
+  const history: Array<{ week_start_utc: string; week_label: string; week_number: number; usdc: number }> = [];
 
   if (user && user.weeks) {
     for (const wk of Object.keys(user.weeks)) {
       const meta = weekMetaByKey.get(wk);
       const usdc = num(user.weeks[wk] || '0');
-      if (!meta || usdc <= 0) continue;
+      if (!meta) continue;
+      if (usdc <= 0) continue;
 
       history.push({
         week_start_utc: wk,
@@ -166,8 +160,7 @@ export default function FindAddressPage({ params }: { params: { address: string 
       all_time_usdc: allTimeTotal,
       latest_week_usdc: latestWeekTotal,
       latest_week_start_utc: latestWeekKey,
-      latest_week_label:
-        weekMetaByKey.get(latestWeekKey)?.week_label || latestWeekKey,
+      latest_week_label: weekMetaByKey.get(latestWeekKey)?.week_label || latestWeekKey,
     },
     reward_history: history,
     meta: {
