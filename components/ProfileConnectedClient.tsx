@@ -1,47 +1,11 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { useMiniKit } from '@coinbase/onchainkit/minikit';
+import Link from 'next/link';
 
 const DEEP_BLUE = '#0000FF';
 const LIGHT_BLUE = '#A5D2FF';
-
-type MiniKitFarcaster = {
-  fid?: number | string;
-  id?: number | string;
-  username?: string;
-  pfpUrl?: string;
-  pfp_url?: string;
-  pfp?: string;
-  followers?: number;
-  followerCount?: number;
-  followers_count?: number;
-  following?: number;
-  followingCount?: number;
-  following_count?: number;
-};
-
-type MiniKitUser = {
-  address?: string;
-  custodyAddress?: string;
-  custody_address?: string;
-  farcaster?: MiniKitFarcaster;
-  verified_addresses?: { eth_addresses?: string[] };
-  verifiedAddresses?: { ethAddresses?: string[] };
-};
-
-type MiniKitInteractor = {
-  verified_addresses?: { eth_addresses?: string[] };
-  verifiedAddresses?: { ethAddresses?: string[] };
-};
-
-type MiniKitContextShape = {
-  user?: MiniKitUser;
-  viewer?: { address?: string };
-  interactor?: MiniKitInteractor;
-  farcaster?: MiniKitFarcaster;
-};
 
 type ApiProfile = {
   address: string;
@@ -65,6 +29,17 @@ type ApiProfile = {
   meta: { created_by: string; support_address: string };
 };
 
+type MiniIdentity = {
+  address: string | null;
+  farcaster: null | {
+    fid?: number;
+    username?: string;
+    pfpUrl?: string;
+    followers?: number;
+    following?: number;
+  };
+};
+
 function formatUSDC(n: number) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
@@ -73,56 +48,72 @@ function shortAddress(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-function isAddress(addr: string | undefined): addr is string {
-  return typeof addr === 'string' && /^0x[a-fA-F0-9]{40}$/.test(addr);
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null;
 }
 
-/**
- * Best-effort extraction of connected EVM address + Farcaster identity
- * from MiniKit context. The exact shape can vary across SDK versions.
- * NOTE: no `any` allowed (Vercel build fails).
- */
-function extractFromMiniKitContext(ctx: MiniKitContextShape | null | undefined): {
-  address: string | null;
-  farcaster: { fid?: number; username?: string; pfpUrl?: string; followers?: number; following?: number } | null;
-} {
-  const candidates: Array<string | undefined> = [
-    ctx?.user?.address,
-    ctx?.user?.custodyAddress,
-    ctx?.user?.custody_address,
-    ctx?.user?.verified_addresses?.eth_addresses?.[0],
-    ctx?.user?.verifiedAddresses?.ethAddresses?.[0],
-    ctx?.viewer?.address,
-    ctx?.interactor?.verified_addresses?.eth_addresses?.[0],
-    ctx?.interactor?.verifiedAddresses?.ethAddresses?.[0],
-  ];
+function getString(v: unknown): string | undefined {
+  return typeof v === 'string' ? v : undefined;
+}
 
-  const address = candidates.find((a) => isAddress(a)) ?? null;
+function getNumber(v: unknown): number | undefined {
+  return typeof v === 'number' ? v : undefined;
+}
 
-  const fc: MiniKitFarcaster | undefined = ctx?.user?.farcaster ?? ctx?.farcaster;
+function findFirstAddress(candidates: Array<unknown>): string | null {
+  for (const c of candidates) {
+    const s = getString(c);
+    if (s && /^0x[a-fA-F0-9]{40}$/.test(s)) return s;
+  }
+  return null;
+}
 
-  const fidRaw = fc?.fid ?? fc?.id;
-  const fidNum =
-    typeof fidRaw === 'string' ? Number(fidRaw) : typeof fidRaw === 'number' ? fidRaw : undefined;
+function extractMiniIdentity(context: unknown): MiniIdentity {
+  if (!isObject(context)) return { address: null, farcaster: null };
 
-  const farcaster = fc
-    ? {
-        fid: Number.isFinite(fidNum ?? NaN) ? fidNum : undefined,
-        username: fc.username,
-        pfpUrl: fc.pfpUrl ?? fc.pfp_url ?? fc.pfp,
-        followers: fc.followers ?? fc.followerCount ?? fc.followers_count,
-        following: fc.following ?? fc.followingCount ?? fc.following_count,
-      }
-    : null;
+  const user = isObject(context.user) ? context.user : null;
+  const viewer = isObject(context.viewer) ? context.viewer : null;
+  const interactor = isObject(context.interactor) ? context.interactor : null;
 
-  return { address, farcaster };
+  const addr = findFirstAddress([
+    user?.address,
+    user?.custodyAddress,
+    (isObject(user?.verified_addresses) && isObject(user?.verified_addresses as unknown)) ? (user as any).verified_addresses?.eth_addresses?.[0] : undefined,
+    (isObject(user?.verifiedAddresses) && isObject(user?.verifiedAddresses as unknown)) ? (user as any).verifiedAddresses?.ethAddresses?.[0] : undefined,
+    viewer?.address,
+    (isObject(interactor?.verified_addresses) && isObject(interactor?.verified_addresses as unknown)) ? (interactor as any).verified_addresses?.eth_addresses?.[0] : undefined,
+    (isObject(interactor?.verifiedAddresses) && isObject(interactor?.verifiedAddresses as unknown)) ? (interactor as any).verifiedAddresses?.ethAddresses?.[0] : undefined
+  ]);
+
+  // Farcaster object can live in different places depending on SDK version.
+  const fcCandidate: unknown =
+    (isObject(user) && isObject((user as Record<string, unknown>).farcaster) ? (user as Record<string, unknown>).farcaster : undefined) ??
+    (isObject(context.farcaster) ? context.farcaster : undefined);
+
+  let farcaster: MiniIdentity['farcaster'] = null;
+
+  if (isObject(fcCandidate)) {
+    const fid = getNumber(fcCandidate.fid) ?? getNumber((fcCandidate as Record<string, unknown>).id);
+    const username = getString(fcCandidate.username);
+    const pfpUrl = getString((fcCandidate as Record<string, unknown>).pfpUrl) ?? getString((fcCandidate as Record<string, unknown>).pfp_url);
+    const followers =
+      getNumber((fcCandidate as Record<string, unknown>).followers) ??
+      getNumber((fcCandidate as Record<string, unknown>).followerCount) ??
+      getNumber((fcCandidate as Record<string, unknown>).followers_count);
+    const following =
+      getNumber((fcCandidate as Record<string, unknown>).following) ??
+      getNumber((fcCandidate as Record<string, unknown>).followingCount) ??
+      getNumber((fcCandidate as Record<string, unknown>).following_count);
+
+    farcaster = { fid, username, pfpUrl, followers, following };
+  }
+
+  return { address: addr, farcaster };
 }
 
 export default function ProfileConnectedClient() {
   const { context } = useMiniKit();
-
-  // `context` type from SDK can be broad; we project it into our safe shape.
-  const mini = useMemo(() => extractFromMiniKitContext(context as unknown as MiniKitContextShape), [context]);
+  const mini = useMemo(() => extractMiniIdentity(context as unknown), [context]);
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -144,32 +135,26 @@ export default function ProfileConnectedClient() {
       try {
         const res = await fetch(`/api/profile?address=${encodeURIComponent(mini.address)}`);
         if (!res.ok) {
-          const j: unknown = await res.json().catch(() => ({}));
-          const msg =
-            typeof j === 'object' && j && 'error' in j && typeof (j as { error?: unknown }).error === 'string'
-              ? (j as { error: string }).error
-              : 'Failed to load profile';
-          throw new Error(msg);
+          const j = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(j.error || 'Failed to load profile');
         }
-
         const payload = (await res.json()) as ApiProfile;
 
-        // Prefer MiniKit identity if available; otherwise keep dataset mapping.
+        // Prefer MiniKit username/pfp when present, else keep dataset mapping.
         const merged: ApiProfile = { ...payload };
 
-        if (mini.farcaster?.username || mini.farcaster?.pfpUrl || mini.farcaster?.fid) {
+        if (mini.farcaster && (mini.farcaster.username || mini.farcaster.pfpUrl || mini.farcaster.fid)) {
           merged.farcaster = {
-            fid:
-              (typeof mini.farcaster?.fid === 'number' ? mini.farcaster.fid : payload.farcaster?.fid ?? 0) ?? 0,
-            username: mini.farcaster?.username ?? payload.farcaster?.username ?? 'unknown',
-            pfp_url: mini.farcaster?.pfpUrl ?? payload.farcaster?.pfp_url ?? null,
+            fid: Number(mini.farcaster.fid ?? payload.farcaster?.fid ?? 0) || (payload.farcaster?.fid ?? 0),
+            username: mini.farcaster.username ?? payload.farcaster?.username ?? 'unknown',
+            pfp_url: mini.farcaster.pfpUrl ?? payload.farcaster?.pfp_url ?? null
           };
         }
 
         if (!cancelled) setData(merged);
       } catch (e: unknown) {
-        const message = e instanceof Error ? e.message : 'Unknown error';
-        if (!cancelled) setErr(message);
+        const msg = e instanceof Error ? e.message : 'Unknown error';
+        if (!cancelled) setErr(msg);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -184,25 +169,23 @@ export default function ProfileConnectedClient() {
   const header = useMemo(() => {
     if (!data) return null;
 
-    const username = data.farcaster?.username ? `@${data.farcaster.username}` : shortAddress(data.address);
     const title = data.farcaster?.username ? data.farcaster.username : shortAddress(data.address);
+    const usernameLine = data.farcaster?.username ? `@${data.farcaster.username}` : shortAddress(data.address);
     const pfp = data.farcaster?.pfp_url || null;
 
     const followers = mini.farcaster?.followers ?? null;
     const following = mini.farcaster?.following ?? null;
 
-    return { username, title, pfp, followers, following };
+    return { title, usernameLine, pfp, followers, following };
   }, [data, mini.farcaster?.followers, mini.farcaster?.following]);
 
   const earnedWeeksGrid = useMemo(() => {
     if (!data?.reward_history?.length) return [];
-
     const items = data.reward_history.map((h) => ({
       label: `Week ${h.week_number}`,
       value: `$${formatUSDC(h.usdc)}`,
-      key: h.week_start_utc,
+      key: h.week_start_utc
     }));
-
     const rows: Array<typeof items> = [];
     for (let i = 0; i < items.length; i += 3) rows.push(items.slice(i, i + 3));
     return rows;
@@ -221,7 +204,7 @@ export default function ProfileConnectedClient() {
             border: `2px solid ${DEEP_BLUE}`,
             borderRadius: 999,
             padding: '8px 10px',
-            background: '#FFFFFF',
+            background: '#FFFFFF'
           }}
         >
           Find
@@ -233,27 +216,23 @@ export default function ProfileConnectedClient() {
           <div style={{ fontSize: 14, fontWeight: 900, color: '#000000', marginBottom: 6 }}>
             No connected wallet found
           </div>
-          <div style={{ fontSize: 13, color: '#000000', opacity: 0.85, marginBottom: 12 }}>
-            Open this page inside Base app (Mini App viewer) so we can read your connected wallet automatically.
-          </div>
           <div style={{ fontSize: 13, color: '#000000', opacity: 0.85 }}>
-            You can still use <span style={{ fontWeight: 900 }}>Find</span> to view any address.
+            Open this page inside Base app (Mini App viewer) so we can read your connected wallet automatically.
           </div>
         </Card>
       ) : loading ? (
         <Card>
           <div style={{ fontSize: 14, fontWeight: 900, color: '#000000' }}>Loading your profile…</div>
-          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6, color: '#000000' }}>{shortAddress(mini.address)}</div>
+          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6, color: '#000000' }}>
+            {shortAddress(mini.address)}
+          </div>
         </Card>
       ) : err ? (
         <Card>
-          <div style={{ fontSize: 14, fontWeight: 900, color: '#000000', marginBottom: 6 }}>Failed to load profile</div>
-          <div style={{ fontSize: 13, color: '#000000', opacity: 0.85 }}>{err}</div>
-          <div style={{ marginTop: 12 }}>
-            <Link href="/find" style={{ color: DEEP_BLUE, fontWeight: 900, textDecoration: 'none' }}>
-              Open Find
-            </Link>
+          <div style={{ fontSize: 14, fontWeight: 900, color: '#000000', marginBottom: 6 }}>
+            Failed to load profile
           </div>
+          <div style={{ fontSize: 13, color: '#000000', opacity: 0.85 }}>{err}</div>
         </Card>
       ) : !data || !header ? (
         <Card>
@@ -274,7 +253,7 @@ export default function ProfileConnectedClient() {
                   alignItems: 'center',
                   justifyContent: 'center',
                   color: '#FFFFFF',
-                  fontWeight: 900,
+                  fontWeight: 900
                 }}
               >
                 {header.pfp ? (
@@ -286,8 +265,12 @@ export default function ProfileConnectedClient() {
               </div>
 
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 16, fontWeight: 900, color: '#000000', lineHeight: 1.1 }}>{header.title}</div>
-                <div style={{ fontSize: 12, opacity: 0.85, color: '#000000', marginTop: 4 }}>{header.username}</div>
+                <div style={{ fontSize: 16, fontWeight: 900, color: '#000000', lineHeight: 1.1 }}>
+                  {header.title}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.85, color: '#000000', marginTop: 4 }}>
+                  {header.usernameLine}
+                </div>
 
                 <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
                   <Pill label="Followers" value={header.followers ?? '—'} />
@@ -337,7 +320,7 @@ export default function ProfileConnectedClient() {
             </div>
           )}
 
-          <SectionTitle title="Social engagement" subtitle="Phase 2: pull Farcaster stats for the latest reward week period" />
+          <SectionTitle title="Social engagement" subtitle="Phase 2: Farcaster stats for latest reward week window" />
 
           <Card>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -345,21 +328,6 @@ export default function ProfileConnectedClient() {
               <MiniStat title="Recasts" value="—" />
               <MiniStat title="Likes" value="—" />
               <MiniStat title="Replies" value="—" />
-            </div>
-          </Card>
-
-          <SectionTitle title="Top posts" subtitle="Phase 2: show top 7 casts from the latest reward week period" />
-          <Card>
-            <div style={{ fontSize: 13, color: '#000000', opacity: 0.85 }}>
-              Coming next. We will fetch your best 7 posts for the latest reward week window.
-            </div>
-          </Card>
-
-          <SectionTitle title="Share your data" subtitle="Phase 3: generate a shareable image + post to X" />
-          <Card>
-            <div style={{ fontSize: 13, color: '#000000', opacity: 0.85 }}>
-              Coming next. We will generate a premium image using your rewards + engagement stats and provide
-              share/download actions.
             </div>
           </Card>
 
@@ -380,7 +348,7 @@ export default function ProfileConnectedClient() {
   );
 }
 
-/* ---------- UI pieces ---------- */
+/* UI helpers */
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
@@ -389,7 +357,7 @@ function Card({ children }: { children: React.ReactNode }) {
         border: `2px solid ${DEEP_BLUE}`,
         borderRadius: 18,
         padding: 12,
-        background: '#FFFFFF',
+        background: '#FFFFFF'
       }}
     >
       {children}
@@ -415,13 +383,15 @@ function SummaryCard({ title, value, subtitle }: { title: string; value: string;
         border: `2px solid ${DEEP_BLUE}`,
         borderRadius: 16,
         padding: 12,
-        background: LIGHT_BLUE,
+        background: LIGHT_BLUE
       }}
     >
       <div style={{ fontSize: 12, fontWeight: 900, color: DEEP_BLUE, marginBottom: 6 }}>{title}</div>
       <div style={{ fontSize: 18, fontWeight: 900, color: DEEP_BLUE, lineHeight: 1.1 }}>{value}</div>
       {subtitle ? (
-        <div style={{ fontSize: 12, fontWeight: 900, color: DEEP_BLUE, opacity: 0.9, marginTop: 6 }}>{subtitle}</div>
+        <div style={{ fontSize: 12, fontWeight: 900, color: DEEP_BLUE, opacity: 0.9, marginTop: 6 }}>
+          {subtitle}
+        </div>
       ) : null}
     </div>
   );
@@ -437,7 +407,7 @@ function Pill({ label, value }: { label: string; value: string | number }) {
         background: '#FFFFFF',
         display: 'flex',
         gap: 8,
-        alignItems: 'center',
+        alignItems: 'center'
       }}
     >
       <div style={{ fontSize: 11, fontWeight: 900, color: DEEP_BLUE }}>{label}</div>
@@ -454,7 +424,7 @@ function MiniWeekCard({ title, value }: { title: string; value: string }) {
         borderRadius: 16,
         padding: 10,
         background: '#FFFFFF',
-        textAlign: 'center',
+        textAlign: 'center'
       }}
     >
       <div style={{ fontSize: 11, fontWeight: 900, color: DEEP_BLUE }}>{title}</div>
@@ -471,7 +441,7 @@ function MiniStat({ title, value }: { title: string; value: string }) {
         borderRadius: 16,
         padding: 12,
         background: '#FFFFFF',
-        textAlign: 'center',
+        textAlign: 'center'
       }}
     >
       <div style={{ fontSize: 11, fontWeight: 900, color: DEEP_BLUE }}>{title}</div>

@@ -17,6 +17,12 @@
     "subtitle": "Weekly rewards dashboard",
     "description": "A stable, cached-JSON dashboard for Base app weekly USDC rewards, with weekly and all-time leaderboards.",
     "heroImageUrl": "https://baseapp-reward-dashboard.vercel.app/hero.png",
-    "screenshotUrls": ["https://baseapp-reward-dashboard.vercel.app/screenshot.png"]
+    "screenshotUrls": ["https://baseapp-reward-dashboard.vercel.app/screenshot.png"],
+
+    "noindex": false,
+    "ogTitle": "Baseapp Reward Dashboard",
+    "ogDescription": "Track weekly and all-time Base app USDC rewards.",
+    "ogImageUrl": "https://baseapp-reward-dashboard.vercel.app/hero.png",
+    "webhookUrl": ""
   }
 }
