@@ -1,13 +1,8 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { useMiniKit } from '@coinbase/onchainkit/minikit';
-import { useAccount } from 'wagmi';
-
-type MiniKitContextLite = {
-  user?: { fid?: string };
-};
+import Link from 'next/link';
 
 type ApiProfile = {
   address: string;
@@ -16,48 +11,104 @@ type ApiProfile = {
     all_time_usdc: number;
     total_weeks_earned: number;
     latest_week_usdc: number;
-    latest_week_start_utc: string;
     latest_week_label: string;
     previous_week_usdc: number;
-    previous_week_start_utc: string | null;
     previous_week_label: string | null;
   };
-  reward_history: Array<{
-    week_start_utc: string;
-    week_label: string;
-    week_number: number;
-    usdc: number;
-  }>;
+  reward_history: Array<{ week_number: number; week_start_utc: string; usdc: number }>;
   meta: { created_by: string; support_address: string };
 };
 
-const DEEP_BLUE = '#0000FF';
-const LIGHT_BLUE = '#A5D2FF';
+type MiniFarcaster = {
+  fid?: number;
+  username?: string;
+  pfpUrl?: string;
+  pfp_url?: string;
+  followers?: number;
+  following?: number;
+  followerCount?: number;
+  followingCount?: number;
+};
+
+type MiniUser = {
+  address?: string;
+  custodyAddress?: string;
+  custody_address?: string;
+  verified_addresses?: { eth_addresses?: string[] };
+  verifiedAddresses?: { ethAddresses?: string[] };
+  farcaster?: MiniFarcaster;
+};
+
+type MiniContext = {
+  user?: MiniUser;
+  viewer?: MiniUser;
+  interactor?: MiniUser;
+  farcaster?: MiniFarcaster;
+};
+
+function isEvmAddress(x: unknown): x is string {
+  return typeof x === 'string' && /^0x[a-fA-F0-9]{40}$/.test(x);
+}
 
 function formatUSDC(n: number) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
+
 function shortAddress(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
-function safeNumber(x: unknown): number | null {
-  const n = typeof x === 'string' ? Number(x) : typeof x === 'number' ? x : NaN;
-  return Number.isFinite(n) ? n : null;
+
+function extractMini(ctx: MiniContext | null | undefined): {
+  address: string | null;
+  farcaster: {
+    fid?: number;
+    username?: string;
+    pfpUrl?: string;
+    followers?: number;
+    following?: number;
+  } | null;
+} {
+  if (!ctx) return { address: null, farcaster: null };
+
+  const candidates: Array<unknown> = [
+    ctx.user?.address,
+    ctx.user?.custodyAddress,
+    ctx.user?.custody_address,
+    ctx.user?.verified_addresses?.eth_addresses?.[0],
+    ctx.user?.verifiedAddresses?.ethAddresses?.[0],
+    ctx.viewer?.address,
+    ctx.viewer?.custodyAddress,
+    ctx.viewer?.verified_addresses?.eth_addresses?.[0],
+    ctx.interactor?.verified_addresses?.eth_addresses?.[0],
+  ];
+
+  const address = candidates.find(isEvmAddress) ?? null;
+
+  const fc = ctx.user?.farcaster ?? ctx.farcaster ?? null;
+
+  const farcaster = fc
+    ? {
+        fid: fc.fid,
+        username: fc.username,
+        pfpUrl: fc.pfpUrl ?? fc.pfp_url,
+        followers: fc.followers ?? fc.followerCount,
+        following: fc.following ?? fc.followingCount,
+      }
+    : null;
+
+  return { address, farcaster };
 }
 
 export default function ProfileConnectedClient() {
   const { context } = useMiniKit();
-  const { address } = useAccount();
 
-  const fid = useMemo(() => {
-    const ctx = context as unknown as MiniKitContextLite;
-    const n = safeNumber(ctx?.user?.fid);
-    return n ?? null;
-  }, [context]);
+  const mini = useMemo(() => extractMini(context as unknown as MiniContext), [context]);
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
   const [data, setData] = useState<ApiProfile | null>(null);
+
+  const depKey = `${mini.address ?? ''}|${mini.farcaster?.fid ?? ''}|${mini.farcaster?.username ?? ''}|${mini.farcaster?.pfpUrl ?? ''}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -65,7 +116,7 @@ export default function ProfileConnectedClient() {
     async function run() {
       setErr(null);
 
-      if (!address) {
+      if (!mini.address) {
         setData(null);
         setLoading(false);
         return;
@@ -73,20 +124,26 @@ export default function ProfileConnectedClient() {
 
       setLoading(true);
       try {
-        const res = await fetch(`/api/profile?address=${encodeURIComponent(address)}`);
+        const res = await fetch(`/api/profile?address=${encodeURIComponent(mini.address)}`);
         if (!res.ok) {
-          const j: unknown = await res.json().catch(() => ({}));
-          const msg =
-            typeof j === 'object' && j && 'error' in j && typeof (j as { error?: unknown }).error === 'string'
-              ? (j as { error: string }).error
-              : 'Failed to load profile';
-          throw new Error(msg);
+          const j = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(j.error || 'Failed to load profile');
         }
+
         const payload = (await res.json()) as ApiProfile;
 
-        // If MiniKit fid exists, we can store it later (Phase 1.5 tracking). For now just keep payload.
-        if (!cancelled) setData(payload);
-      } catch (e: unknown) {
+        // Prefer MiniKit farcaster info if present
+        const merged: ApiProfile = { ...payload };
+        if (mini.farcaster?.username || mini.farcaster?.pfpUrl || mini.farcaster?.fid) {
+          merged.farcaster = {
+            fid: Number(mini.farcaster.fid ?? payload.farcaster?.fid ?? 0) || (payload.farcaster?.fid ?? 0),
+            username: mini.farcaster.username ?? payload.farcaster?.username ?? 'unknown',
+            pfp_url: mini.farcaster.pfpUrl ?? payload.farcaster?.pfp_url ?? null,
+          };
+        }
+
+        if (!cancelled) setData(merged);
+      } catch (e) {
         const msg = e instanceof Error ? e.message : 'Unknown error';
         if (!cancelled) setErr(msg);
       } finally {
@@ -98,152 +155,107 @@ export default function ProfileConnectedClient() {
     return () => {
       cancelled = true;
     };
-  }, [address]);
+  }, [depKey]);
 
-  const earnedWeeksGrid = useMemo(() => {
-    if (!data?.reward_history?.length) return [];
-    const items = data.reward_history.map((h) => ({
-      label: `Week ${h.week_number}`,
-      value: `$${formatUSDC(h.usdc)}`,
-      key: h.week_start_utc,
-    }));
-    const rows: Array<typeof items> = [];
-    for (let i = 0; i < items.length; i += 3) rows.push(items.slice(i, i + 3));
-    return rows;
-  }, [data]);
-
-  return (
-    <div style={{ paddingBottom: 28 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <div style={{ fontSize: 18, fontWeight: 900, color: '#000000' }}>Profile</div>
-        <Link
-          href="/find"
-          style={{
-            textDecoration: 'none',
-            fontWeight: 900,
-            color: DEEP_BLUE,
-            border: `2px solid ${DEEP_BLUE}`,
-            borderRadius: 999,
-            padding: '8px 10px',
-            background: '#FFFFFF',
-          }}
-        >
-          Find
+  if (!mini.address) {
+    return (
+      <div style={{ padding: 12 }}>
+        <div style={{ fontWeight: 900, marginBottom: 6 }}>No connected wallet found</div>
+        <div style={{ opacity: 0.8, marginBottom: 10 }}>
+          Open inside Base app so the Mini App can read your connected wallet.
+        </div>
+        <Link href="/find" style={{ fontWeight: 900 }}>
+          Use Find instead
         </Link>
       </div>
+    );
+  }
 
-      {!address ? (
-        <Card>
-          <div style={{ fontSize: 14, fontWeight: 900, color: '#000000', marginBottom: 6 }}>
-            No connected wallet detected
-          </div>
-          <div style={{ fontSize: 13, color: '#000000', opacity: 0.85 }}>
-            Open inside Base app. If it still shows this, your OnchainKit API key or MiniKit init is missing.
-          </div>
-        </Card>
-      ) : loading ? (
-        <Card>
-          <div style={{ fontSize: 14, fontWeight: 900, color: '#000000' }}>Loading…</div>
-          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6, color: '#000000' }}>{shortAddress(address)}</div>
-        </Card>
-      ) : err ? (
-        <Card>
-          <div style={{ fontSize: 14, fontWeight: 900, color: '#000000', marginBottom: 6 }}>Failed to load</div>
-          <div style={{ fontSize: 13, color: '#000000', opacity: 0.85 }}>{err}</div>
-        </Card>
-      ) : !data ? (
-        <Card>
-          <div style={{ fontSize: 14, fontWeight: 900, color: '#000000' }}>No data</div>
-        </Card>
-      ) : (
-        <>
-          <Card>
-            <div style={{ fontSize: 12, opacity: 0.8, color: '#000000' }}>Wallet</div>
-            <div style={{ fontSize: 14, fontWeight: 900, color: '#000000' }}>{shortAddress(data.address)}</div>
-            <div style={{ fontSize: 12, opacity: 0.8, color: '#000000', marginTop: 6 }}>
-              Farcaster fid: {fid ?? '—'}
-            </div>
-          </Card>
+  if (loading) {
+    return (
+      <div style={{ padding: 12 }}>
+        <div style={{ fontWeight: 900 }}>Loading…</div>
+        <div style={{ opacity: 0.8 }}>{shortAddress(mini.address)}</div>
+      </div>
+    );
+  }
 
-          <SectionTitle title="Onchain rewards" subtitle="Auto-updates when a new reward week is indexed" />
+  if (err) {
+    return (
+      <div style={{ padding: 12 }}>
+        <div style={{ fontWeight: 900, marginBottom: 6 }}>Failed to load profile</div>
+        <div style={{ opacity: 0.8 }}>{err}</div>
+      </div>
+    );
+  }
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <SummaryCard title="All-time USDC" value={`$${formatUSDC(data.reward_summary.all_time_usdc)}`} />
-            <SummaryCard title="Weeks earned" value={`${data.reward_summary.total_weeks_earned}`} />
-            <SummaryCard
-              title="Current week"
-              value={`$${formatUSDC(data.reward_summary.latest_week_usdc)}`}
-              subtitle={data.reward_summary.latest_week_label}
-            />
-            <SummaryCard
-              title="Previous week"
-              value={`$${formatUSDC(data.reward_summary.previous_week_usdc)}`}
-              subtitle={data.reward_summary.previous_week_label ?? '—'}
-            />
-          </div>
+  if (!data) {
+    return (
+      <div style={{ padding: 12 }}>
+        <div style={{ fontWeight: 900 }}>No data</div>
+      </div>
+    );
+  }
 
-          <SectionTitle title="Winning weeks" subtitle="Only weeks where you earned rewards are shown" />
+  const title = data.farcaster?.username ? data.farcaster.username : shortAddress(data.address);
+  const username = data.farcaster?.username ? `@${data.farcaster.username}` : shortAddress(data.address);
+  const pfp = data.farcaster?.pfp_url ?? null;
 
-          {earnedWeeksGrid.length === 0 ? (
-            <Card>
-              <div style={{ fontSize: 13, opacity: 0.85, color: '#000000' }}>
-                No reward history found for this wallet.
-              </div>
-            </Card>
+  return (
+    <div style={{ padding: 12 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 14 }}>
+        <div
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: 14,
+            overflow: 'hidden',
+            background: '#0000FF',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#fff',
+            fontWeight: 900,
+          }}
+        >
+          {pfp ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={pfp} alt="pfp" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {earnedWeeksGrid.map((row, idx) => (
-                <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
-                  {row.map((item) => (
-                    <MiniWeekCard key={item.key} title={item.label} value={item.value} />
-                  ))}
-                  {row.length < 3 ? Array.from({ length: 3 - row.length }).map((_, i) => <div key={`pad-${i}`} />) : null}
-                </div>
-              ))}
-            </div>
+            title.slice(0, 1).toUpperCase()
           )}
+        </div>
 
-          <SectionTitle title="Social engagement" subtitle="Phase 2: fetch stats for latest reward week window" />
-          <Card>
-            <div style={{ fontSize: 13, color: '#000000', opacity: 0.85 }}>
-              Coming next (casts / recasts / likes / replies + top 7 posts).
-            </div>
-          </Card>
-        </>
-      )}
-    </div>
-  );
-}
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 900, fontSize: 16 }}>{title}</div>
+          <div style={{ opacity: 0.75, fontSize: 12 }}>{username}</div>
+        </div>
+      </div>
 
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ border: `2px solid ${DEEP_BLUE}`, borderRadius: 18, padding: 12, background: '#FFFFFF' }}>
-      {children}
-    </div>
-  );
-}
-function SectionTitle({ title, subtitle }: { title: string; subtitle?: string }) {
-  return (
-    <div style={{ marginTop: 14, marginBottom: 10 }}>
-      <div style={{ fontSize: 14, fontWeight: 900, color: '#000000' }}>{title}</div>
-      {subtitle ? <div style={{ fontSize: 12, opacity: 0.8, color: '#000000', marginTop: 3 }}>{subtitle}</div> : null}
-    </div>
-  );
-}
-function SummaryCard({ title, value, subtitle }: { title: string; value: string; subtitle?: string }) {
-  return (
-    <div style={{ border: `2px solid ${DEEP_BLUE}`, borderRadius: 16, padding: 12, background: LIGHT_BLUE }}>
-      <div style={{ fontSize: 12, fontWeight: 900, color: DEEP_BLUE, marginBottom: 6 }}>{title}</div>
-      <div style={{ fontSize: 18, fontWeight: 900, color: DEEP_BLUE, lineHeight: 1.1 }}>{value}</div>
-      {subtitle ? <div style={{ fontSize: 12, fontWeight: 900, color: DEEP_BLUE, marginTop: 6 }}>{subtitle}</div> : null}
-    </div>
-  );
-}
-function MiniWeekCard({ title, value }: { title: string; value: string }) {
-  return (
-    <div style={{ border: `2px solid ${DEEP_BLUE}`, borderRadius: 16, padding: 10, background: '#FFFFFF', textAlign: 'center' }}>
-      <div style={{ fontSize: 11, fontWeight: 900, color: DEEP_BLUE }}>{title}</div>
-      <div style={{ fontSize: 14, fontWeight: 900, color: '#000000', marginTop: 6 }}>{value}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div style={{ border: '2px solid #0000FF', borderRadius: 14, padding: 10 }}>
+          <div style={{ fontWeight: 900, fontSize: 12, opacity: 0.8 }}>All-time</div>
+          <div style={{ fontWeight: 900, fontSize: 18 }}>${formatUSDC(data.reward_summary.all_time_usdc)}</div>
+        </div>
+        <div style={{ border: '2px solid #0000FF', borderRadius: 14, padding: 10 }}>
+          <div style={{ fontWeight: 900, fontSize: 12, opacity: 0.8 }}>Weeks earned</div>
+          <div style={{ fontWeight: 900, fontSize: 18 }}>{data.reward_summary.total_weeks_earned}</div>
+        </div>
+        <div style={{ border: '2px solid #0000FF', borderRadius: 14, padding: 10 }}>
+          <div style={{ fontWeight: 900, fontSize: 12, opacity: 0.8 }}>Current week</div>
+          <div style={{ fontWeight: 900, fontSize: 18 }}>${formatUSDC(data.reward_summary.latest_week_usdc)}</div>
+          <div style={{ opacity: 0.7, fontSize: 12 }}>{data.reward_summary.latest_week_label}</div>
+        </div>
+        <div style={{ border: '2px solid #0000FF', borderRadius: 14, padding: 10 }}>
+          <div style={{ fontWeight: 900, fontSize: 12, opacity: 0.8 }}>Previous week</div>
+          <div style={{ fontWeight: 900, fontSize: 18 }}>${formatUSDC(data.reward_summary.previous_week_usdc)}</div>
+          <div style={{ opacity: 0.7, fontSize: 12 }}>{data.reward_summary.previous_week_label ?? '—'}</div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 14, opacity: 0.75, fontSize: 12 }}>
+        Phase 2 will add social stats + top posts.
+      </div>
     </div>
   );
 }
