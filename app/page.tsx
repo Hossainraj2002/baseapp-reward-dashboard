@@ -1,4 +1,3 @@
-import FrameReady from '@/components/FrameReady';
 import CopyButton from '@/components/CopyButton';
 import HomeLatestWeekLeaderboardClient from '@/components/HomeLatestWeekLeaderboardClient';
 import { getOverview, getWeeklyLatestLeaderboard } from '@/lib/dataFiles';
@@ -15,15 +14,13 @@ export default function HomePage() {
   const overview = getOverview();
   const weeklyLatest = getWeeklyLatestLeaderboard();
 
-  // Home Change 1: single-line date
   const lastDistributedOn = overview.latest_week.week_start_utc;
 
   return (
     <main className="page" style={{ paddingBottom: 28 }}>
-      <FrameReady />
-
       {/* Header with real logo from /public */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/logo.png"
           alt="Baseapp Reward Dashboard logo"
@@ -36,7 +33,7 @@ export default function HomePage() {
             background: '#FFFFFF',
           }}
         />
-<meta name="base:app_id" content="6970f9825f24b57cc50d3331" />
+
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 18, fontWeight: 900, lineHeight: 1.2, color: '#0000FF' }}>
             Baseapp Reward Dashboard
@@ -49,7 +46,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* KPI Cards (deep blue background, numbers/text white bold rule) */}
+      {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
         <KpiCardDeep title="All-time USDC" value={`$${formatUSDC(overview.all_time.total_usdc)}`} />
         <KpiCardDeep title="All-time users" value={overview.all_time.unique_users.toLocaleString()} />
@@ -57,7 +54,6 @@ export default function HomePage() {
         <KpiCardDeep title="Latest week users" value={overview.latest_week.unique_users.toLocaleString()} />
       </div>
 
-      {/* Weekly Reward Breakdown (compact, no scrolling, light blue amount pill) */}
       <SectionTitle title="Weekly reward breakdown" subtitle="Latest week distribution buckets" />
 
       <div
@@ -72,13 +68,7 @@ export default function HomePage() {
         {overview.latest_week.breakdown.length === 0 ? (
           <div className="subtle">No breakdown data found for the latest week.</div>
         ) : (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 8,
-            }}
-          >
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             {overview.latest_week.breakdown.slice(0, 12).map((b, idx) => (
               <div
                 key={`${b.reward_usdc}-${idx}`}
@@ -87,7 +77,7 @@ export default function HomePage() {
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: 8,
-                  padding: '6px 8px', // compact row
+                  padding: '6px 8px',
                   border: '1px solid rgba(10,10,10,0.08)',
                   borderRadius: 12,
                   background: '#FFFFFF',
@@ -97,7 +87,7 @@ export default function HomePage() {
                   style={{
                     padding: '4px 8px',
                     borderRadius: 999,
-                    background: '#A5D2FF', // amount color = light blue (as requested)
+                    background: '#A5D2FF',
                     color: '#0000FF',
                     fontWeight: 900,
                     fontSize: 12,
@@ -117,12 +107,9 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* Latest week leaderboard: match weekly table style + centered + sticky rank/user + controls below */}
       <SectionTitle title="Latest week leaderboard" subtitle="Same layout as weekly page" />
-
       <HomeLatestWeekLeaderboardClient rows={weeklyLatest.rows} />
 
-      {/* Footer + Support Creator (new credit style + link + copy icon) */}
       <div style={{ marginTop: 16 }}>
         <div className="card card-pad">
           <div style={{ fontSize: 13, color: '#6B7280', marginBottom: 10 }}>
@@ -170,8 +157,6 @@ function KpiCardDeep({ title, value }: { title: string; value: string }) {
       <div style={{ fontSize: 12, opacity: 0.95, marginBottom: 6, color: '#FFFFFF', fontWeight: 900 }}>
         {title}
       </div>
-
-      {/* Universal rule: any text/number on deep blue must be white + bold */}
       <div style={{ fontSize: 18, fontWeight: 900, color: '#FFFFFF' }}>{value}</div>
     </div>
   );

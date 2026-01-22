@@ -3,7 +3,6 @@ import RootProvider from './rootProvider';
 import FrameReady from '@/components/FrameReady';
 import './globals.css';
 
-// Keep your existing env name, but set it correctly in Vercel too
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
 const MINIAPP_EMBED = JSON.stringify({
@@ -30,18 +29,15 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-  <html lang="en">
-    <body>
-      <FrameReady />
-      <RootProvider>{children}</RootProvider>
-    </body>
-  </html>
-);
+    <html lang="en">
+      <body>
+        {/* Must be first; must NOT depend on any provider */}
+        <FrameReady />
 
+        <RootProvider>{children}</RootProvider>
+      </body>
+    </html>
+  );
 }
