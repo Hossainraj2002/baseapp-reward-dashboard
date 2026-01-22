@@ -1,38 +1,41 @@
 'use client';
 
 import { useEffect } from 'react';
+import { sdk as farcasterSdk } from '@farcaster/miniapp-sdk';
 import { useMiniKit } from '@coinbase/onchainkit/minikit';
 
 /**
- * Base.dev preview (and Base app) expects the Mini App to signal "ready".
- * OnchainKit versions can expose different APIs, so we call all known variants safely.
+ * Base.dev preview + Farcaster Mini Apps require sdk.actions.ready()
+ * to dismiss the splash screen.
+ *
+ * We also call MiniKit readiness (best-effort) for Base App runtime.
  */
 export default function FrameReady() {
-  const mini = useMiniKit();
+  const minikit = useMiniKit();
 
   useEffect(() => {
+    // 1) Farcaster/Base preview readiness (the critical one)
+    (async () => {
+      try {
+        await farcasterSdk.actions.ready();
+      } catch {
+        // If running outside the miniapp runtime, ignore.
+      }
+    })();
+
+    // 2) MiniKit readiness (best-effort; API can vary by version)
+    const mk = minikit as unknown as {
+      setFrameReady?: () => void;
+      ready?: () => void;
+    };
+
     try {
-      // Variant A (older templates)
-      const setFrameReady = (mini as unknown as { setFrameReady?: () => void }).setFrameReady;
-      if (typeof setFrameReady === 'function') setFrameReady();
-
-      // Variant B (some builds expose ready directly)
-      const readyDirect = (mini as unknown as { ready?: () => void }).ready;
-      if (typeof readyDirect === 'function') readyDirect();
-
-      // Variant C (nested miniKit object)
-      const readyNested = (mini as unknown as { miniKit?: { ready?: () => void } }).miniKit?.ready;
-      if (typeof readyNested === 'function') readyNested();
-
-      // Helpful log for Base.dev console
-      // (You should see this log once the app loads)
-      // eslint-disable-next-line no-console
-      console.log('[FrameReady] ready() called');
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error('[FrameReady] ready() failed', e);
+      if (typeof mk.setFrameReady === 'function') mk.setFrameReady();
+      if (typeof mk.ready === 'function') mk.ready();
+    } catch {
+      // ignore
     }
-  }, [mini]);
+  }, [minikit]);
 
   return null;
 }

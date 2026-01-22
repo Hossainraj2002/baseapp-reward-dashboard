@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
 import RootProvider from './rootProvider';
+import FrameReady from '@/components/FrameReady';
 import './globals.css';
 
+// Keep your existing env name, but set it correctly in Vercel too
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
 const MINIAPP_EMBED = JSON.stringify({
@@ -23,9 +25,7 @@ export const metadata: Metadata = {
   title: 'Baseapp Reward Dashboard',
   description: 'Weekly creator rewards dashboard for explore more details.',
   other: {
-    // Farcaster Mini App embed metadata
     'fc:miniapp': MINIAPP_EMBED,
-    // Backward compatibility for some clients
     'fc:frame': MINIAPP_EMBED,
   },
 };
@@ -38,7 +38,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <RootProvider>{children}</RootProvider>
+        <RootProvider>
+          <FrameReady />
+          {children}
+        </RootProvider>
       </body>
     </html>
   );
