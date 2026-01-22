@@ -36,13 +36,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body>
-        <RootProvider>
-          <FrameReady />
-          {children}
-        </RootProvider>
-      </body>
-    </html>
-  );
+  <html lang="en">
+    <body>
+      <FrameReady />
+      <RootProvider>{children}</RootProvider>
+    </body>
+  </html>
+);
+
 }
