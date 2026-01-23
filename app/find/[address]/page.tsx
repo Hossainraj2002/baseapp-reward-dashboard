@@ -16,12 +16,12 @@ function isAddressLike(s: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(s);
 }
 
-export default function FindAddressPage({
+export default async function FindAddressPage({
   params,
 }: {
-  params: { address: string };
+  params: Promise<{ address: string }>;
 }) {
-  const addrRaw = params.address;
+  const { address: addrRaw } = await params;
 
   if (!isAddressLike(addrRaw)) {
     return (
