@@ -3,13 +3,18 @@
 import React from 'react';
 import { OnchainKitProvider } from '@coinbase/onchainkit';
 import { base } from 'viem/chains';
+
 import BottomNav from '@/components/BottomNav';
+import MiniKitReady from '@/components/MiniKitReady';
 
 export default function RootProvider({ children }: { children: React.ReactNode }) {
-  const apiKey = process.env.NEXT_PUBLIC_ONCHAINKIT_API_KEY ?? '';
+  const apiKey = process.env.NEXT_PUBLIC_ONCHAINKIT_API_KEY;
 
   return (
     <OnchainKitProvider apiKey={apiKey} chain={base} miniKit={{ enabled: true }}>
+      {/* Signals readiness to Base host once provider is mounted */}
+      <MiniKitReady />
+
       <div style={{ minHeight: '100vh', background: '#ffffff' }}>
         <div style={{ maxWidth: 420, margin: '0 auto', paddingBottom: 96 }}>
           {children}
