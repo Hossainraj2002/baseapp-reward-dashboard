@@ -16,12 +16,13 @@ function isAddressLike(s: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(s);
 }
 
-export default function FindAddressPage({
+// NOTE: Next.js 15.3.x expects params to be a Promise in type checking for dynamic routes.
+export default async function FindAddressPage({
   params,
 }: {
-  params: { address: string };
+  params: Promise<{ address: string }>;
 }) {
-  const addrRaw = params.address;
+  const { address: addrRaw } = await params;
 
   if (!isAddressLike(addrRaw)) {
     return (
