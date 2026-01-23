@@ -11,11 +11,11 @@ import {
 import { base } from 'viem/chains';
 
 // -----------------------------
-// CONFIG (your provided constants)
+// CONFIG
 // -----------------------------
 const RPC_URLS = [
-  'https://base-rpc.publicnode.com', // prefer stable free
-  'https://mainnet.base.org',        // official free fallback
+  'https://base-rpc.publicnode.com',
+  'https://mainnet.base.org',
 ];
 
 const USDC_ADDRESS = getAddress('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913');
@@ -32,7 +32,7 @@ const PATH_FARCASTER_MAP = path.join(DATA_DIR, 'farcaster_map.json');
 const PATH_STATE = path.join(DATA_DIR, '_indexer_state.json');
 
 // Stability knobs for free RPCs
-const CHUNK_SIZE_BLOCKS = 5_000n;
+const CHUNK_SIZE_BLOCKS = 9_000n;
 const PAUSE_MS_BETWEEN_CHUNKS = 350;
 const PAUSE_MS_BETWEEN_BLOCK_FETCH = 50;
 
@@ -49,8 +49,6 @@ const MIN_SPLIT_RANGE_BLOCKS = 200n;
 // -----------------------------
 // WEEK DEFINITION (MATCH YOUR TABLE)
 // -----------------------------
-// Your dashboard week starts at Wednesday 00:00 UTC.
-// Your Week 1: 2025-07-23 00:00 UTC (Wednesday).
 const WEEK_1_START_UTC = '2025-07-23T00:00:00.000Z';
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
 
@@ -81,7 +79,6 @@ function formatWeekLabel(weekNumber, weekKeyYYYYMMDD) {
     year: 'numeric',
     timeZone: 'UTC',
   });
-  // Example: "14 Jan 2026"
   return `Week ${weekNumber} – ${fmt.format(d).replace(',', '')}`;
 }
 
@@ -122,6 +119,20 @@ function usdcToString(valueBigInt) {
   return formatUnits(valueBigInt, 6);
 }
 
+// Safe parse decimal USDC string -> bigint (6 decimals)
+function usdcStringToBigInt(s) {
+  // accepts "12.3456" or "12" etc
+  const str = String(s).trim();
+  if (!str) return 0n;
+  const neg = str.startsWith('-');
+  const clean = neg ? str.slice(1) : str;
+
+  const [whole, frac = ''] = clean.split('.');
+  const fracPadded = (frac + '000000').slice(0, 6);
+  const bi = BigInt(whole || '0') * 1_000_000n + BigInt(fracPadded || '0');
+  return neg ? -bi : bi;
+}
+
 function toShortAddress(addr) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
@@ -140,9 +151,7 @@ function pctChange(current, previous) {
 function makeClient(rpcUrl) {
   return createPublicClient({
     chain: base,
-    transport: http(rpcUrl, {
-      timeout: HTTP_TIMEOUT_MS,
-    }),
+    transport: http(rpcUrl, { timeout: HTTP_TIMEOUT_MS }),
   });
 }
 
@@ -165,16 +174,9 @@ function isRetryableRpcError(err) {
   );
 }
 
-// Try each RPC, with retries + backoff.
 async function getLogsOnceOnRpc({ rpcUrl, address, event, args, fromBlock, toBlock }) {
   const client = makeClient(rpcUrl);
-  return client.getLogs({
-    address,
-    event,
-    args,
-    fromBlock,
-    toBlock,
-  });
+  return client.getLogs({ address, event, args, fromBlock, toBlock });
 }
 
 async function getLogsWithFallbackOnce({ address, event, args, fromBlock, toBlock }) {
@@ -198,9 +200,7 @@ async function getLogsWithFallbackOnce({ address, event, args, fromBlock, toBloc
         if (!isRetryableRpcError(err)) throw err;
 
         const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt);
-        console.warn(
-          `RPC error on ${rpcUrl} (attempt ${attempt + 1}/${MAX_RETRIES_PER_CHUNK + 1}). Backing off ${backoff}ms...`
-        );
+        console.warn(`RPC error on ${rpcUrl} (attempt ${attempt + 1}/${MAX_RETRIES_PER_CHUNK + 1}). Backing off ${backoff}ms...`);
         await sleep(backoff);
       }
     }
@@ -211,7 +211,6 @@ async function getLogsWithFallbackOnce({ address, event, args, fromBlock, toBloc
   throw lastErr || new Error('All RPCs failed.');
 }
 
-// If a range times out, split into smaller ranges until success (or minimum size).
 async function getLogsWithFallbackSplit({ address, event, args, fromBlock, toBlock }) {
   try {
     return await getLogsWithFallbackOnce({ address, event, args, fromBlock, toBlock });
@@ -225,30 +224,64 @@ async function getLogsWithFallbackSplit({ address, event, args, fromBlock, toBlo
 
     const mid = fromBlock + (range / 2n);
 
-    console.warn(
-      `Timeout on range ${fromBlock}->${toBlock}. Splitting into ${fromBlock}->${mid} and ${mid + 1n}->${toBlock}`
-    );
+    console.warn(`Timeout on range ${fromBlock}->${toBlock}. Splitting into ${fromBlock}->${mid} and ${mid + 1n}->${toBlock}`);
 
     const left = await getLogsWithFallbackSplit({
-      address,
-      event,
-      args,
-      fromBlock,
-      toBlock: mid,
+      address, event, args, fromBlock, toBlock: mid,
     });
 
     const right = await getLogsWithFallbackSplit({
-      address,
-      event,
-      args,
-      fromBlock: mid + 1n,
-      toBlock,
+      address, event, args, fromBlock: mid + 1n, toBlock,
     });
 
-    return {
-      logs: [...left.logs, ...right.logs],
-      rpcUrlUsed: left.rpcUrlUsed,
-    };
+    return { logs: [...left.logs, ...right.logs], rpcUrlUsed: left.rpcUrlUsed };
+  }
+}
+
+// -----------------------------
+// Load EXISTING history into memory
+// -----------------------------
+function loadExistingHistoryIntoMaps({ weekTotals, weekUsers, userAllTime, userWeeks }) {
+  const existingWeekly = readJsonSafe(PATH_WEEKLY, null);
+  const existingAllTime = readJsonSafe(PATH_LB_ALL_TIME, null);
+
+  const weekKeys =
+    (existingWeekly && Array.isArray(existingWeekly.week_keys) && existingWeekly.week_keys) ||
+    (existingAllTime && Array.isArray(existingAllTime.week_keys) && existingAllTime.week_keys) ||
+    [];
+
+  // Ensure week sets exist
+  for (const wk of weekKeys) {
+    if (!weekUsers.has(wk)) weekUsers.set(wk, new Set());
+    if (!weekTotals.has(wk)) weekTotals.set(wk, 0n);
+  }
+
+  // Rebuild per-user per-week from leaderboard_all_time.json (most reliable)
+  if (existingAllTime && Array.isArray(existingAllTime.rows)) {
+    for (const row of existingAllTime.rows) {
+      const addr = getAddress(row.address);
+      if (!userWeeks.has(addr)) userWeeks.set(addr, new Map());
+
+      const weeksObj = row.weeks || {};
+      for (const [wk, usdcStr] of Object.entries(weeksObj)) {
+        const v = usdcStringToBigInt(usdcStr);
+        if (v <= 0n) continue;
+
+        // userWeeks
+        const uw = userWeeks.get(addr);
+        uw.set(wk, (uw.get(wk) || 0n) + v);
+
+        // weekTotals
+        weekTotals.set(wk, (weekTotals.get(wk) || 0n) + v);
+
+        // weekUsers
+        if (!weekUsers.has(wk)) weekUsers.set(wk, new Set());
+        weekUsers.get(wk).add(addr);
+
+        // userAllTime
+        userAllTime.set(addr, (userAllTime.get(addr) || 0n) + v);
+      }
+    }
   }
 }
 
@@ -279,106 +312,108 @@ async function main() {
   const startBlock =
     state.lastProcessedBlock != null ? BigInt(state.lastProcessedBlock) + 1n : FIRST_REWARD_BLOCK;
 
-  if (startBlock > latestBlock) {
-    console.log('Nothing to index. startBlock is already past latest block.');
-    process.exit(0);
-  }
-
   console.log('--- Baseapp Reward Dashboard Indexer ---');
-  console.log('RPC fallbacks:', RPC_URLS.join(' | '));
-  console.log('HTTP timeout (ms):', HTTP_TIMEOUT_MS);
-  console.log('USDC:', USDC_ADDRESS);
-  console.log('Distributor:', REWARD_DISTRIBUTOR);
   console.log('Start block:', startBlock.toString());
   console.log('Latest block:', latestBlock.toString());
-  console.log('Chunk size:', CHUNK_SIZE_BLOCKS.toString());
-  console.log('---------------------------------------');
 
-  const transferEvent = parseAbiItem(
-    'event Transfer(address indexed from, address indexed to, uint256 value)'
-  );
-
+  // Create maps
   const weekTotals = new Map();   // weekKey -> bigint
   const weekUsers = new Map();    // weekKey -> Set(address)
   const userAllTime = new Map();  // address -> bigint
   const userWeeks = new Map();    // address -> Map(weekKey -> bigint)
 
-  const blockTsCache = new Map();
+  // IMPORTANT: Load existing history so we don't overwrite it
+  loadExistingHistoryIntoMaps({ weekTotals, weekUsers, userAllTime, userWeeks });
 
-  async function getBlockTimestamp(blockNumber) {
-    const key = blockNumber.toString();
-    if (blockTsCache.has(key)) return blockTsCache.get(key);
+  if (startBlock > latestBlock) {
+    console.log('Nothing new to index. Rewriting outputs from existing data only...');
+  } else {
+    const transferEvent = parseAbiItem(
+      'event Transfer(address indexed from, address indexed to, uint256 value)'
+    );
 
-    let lastErr = null;
-    for (const rpcUrl of RPC_URLS) {
-      try {
-        const b = await makeClient(rpcUrl).getBlock({ blockNumber });
-        const ts = b.timestamp;
-        blockTsCache.set(key, ts);
-        await sleep(PAUSE_MS_BETWEEN_BLOCK_FETCH);
-        return ts;
-      } catch (e) {
-        lastErr = e;
+    const blockTsCache = new Map();
+
+    async function getBlockTimestamp(blockNumber) {
+      const key = blockNumber.toString();
+      if (blockTsCache.has(key)) return blockTsCache.get(key);
+
+      let lastErr = null;
+      for (const rpcUrl of RPC_URLS) {
+        try {
+          const b = await makeClient(rpcUrl).getBlock({ blockNumber });
+          const ts = b.timestamp;
+          blockTsCache.set(key, ts);
+          await sleep(PAUSE_MS_BETWEEN_BLOCK_FETCH);
+          return ts;
+        } catch (e) {
+          lastErr = e;
+        }
       }
+      throw lastErr || new Error('Failed to fetch block timestamp from any RPC.');
     }
-    throw lastErr || new Error('Failed to fetch block timestamp from any RPC.');
+
+    let from = startBlock;
+    while (from <= latestBlock) {
+      const to =
+        from + CHUNK_SIZE_BLOCKS - 1n <= latestBlock ? from + CHUNK_SIZE_BLOCKS - 1n : latestBlock;
+
+      console.log(`Fetching logs: blocks ${from} -> ${to}`);
+
+      let logs = [];
+      let rpcUsed = null;
+
+      try {
+        const res = await getLogsWithFallbackSplit({
+          address: USDC_ADDRESS,
+          event: transferEvent,
+          args: { from: REWARD_DISTRIBUTOR },
+          fromBlock: from,
+          toBlock: to,
+        });
+        logs = res.logs;
+        rpcUsed = res.rpcUrlUsed;
+      } catch (err) {
+        console.error('RPC getLogs failed for range:', from.toString(), to.toString());
+        console.error('Error:', err?.message || err);
+        console.error('Re-run later to resume.');
+        process.exit(1);
+      }
+
+      console.log(`Got ${logs.length} logs (RPC used: ${rpcUsed})`);
+
+      for (const log of logs) {
+        const toAddr = getAddress(log.args.to);
+        const value = log.args.value;
+
+        const ts = await getBlockTimestamp(log.blockNumber);
+        const wk = getWeekKeyFromUnixSeconds(ts);
+
+        // weekTotals
+        weekTotals.set(wk, (weekTotals.get(wk) || 0n) + value);
+
+        // weekUsers
+        if (!weekUsers.has(wk)) weekUsers.set(wk, new Set());
+        weekUsers.get(wk).add(toAddr);
+
+        // userAllTime
+        userAllTime.set(toAddr, (userAllTime.get(toAddr) || 0n) + value);
+
+        // userWeeks
+        if (!userWeeks.has(toAddr)) userWeeks.set(toAddr, new Map());
+        const uw = userWeeks.get(toAddr);
+        uw.set(wk, (uw.get(wk) || 0n) + value);
+      }
+
+      state.lastProcessedBlock = Number(to);
+      writeJsonAtomic(PATH_STATE, state);
+
+      from = to + 1n;
+      await sleep(PAUSE_MS_BETWEEN_CHUNKS);
+    }
   }
 
-  let from = startBlock;
-  while (from <= latestBlock) {
-    const to =
-      from + CHUNK_SIZE_BLOCKS - 1n <= latestBlock ? from + CHUNK_SIZE_BLOCKS - 1n : latestBlock;
-
-    console.log(`Fetching logs: blocks ${from} -> ${to}`);
-
-    let logs = [];
-    let rpcUsed = null;
-
-    try {
-      const res = await getLogsWithFallbackSplit({
-        address: USDC_ADDRESS,
-        event: transferEvent,
-        args: { from: REWARD_DISTRIBUTOR },
-        fromBlock: from,
-        toBlock: to,
-      });
-      logs = res.logs;
-      rpcUsed = res.rpcUrlUsed;
-    } catch (err) {
-      console.error('RPC getLogs failed for range:', from.toString(), to.toString());
-      console.error('Error:', err?.message || err);
-      console.error('All free RPC fallbacks failed for this range. Re-run later to resume.');
-      process.exit(1);
-    }
-
-    console.log(`Got ${logs.length} logs (RPC used: ${rpcUsed})`);
-
-    for (const log of logs) {
-      const toAddr = getAddress(log.args.to);
-      const value = log.args.value;
-
-      const ts = await getBlockTimestamp(log.blockNumber);
-      const wk = getWeekKeyFromUnixSeconds(ts);
-
-      weekTotals.set(wk, (weekTotals.get(wk) || 0n) + value);
-
-      if (!weekUsers.has(wk)) weekUsers.set(wk, new Set());
-      weekUsers.get(wk).add(toAddr);
-
-      userAllTime.set(toAddr, (userAllTime.get(toAddr) || 0n) + value);
-
-      if (!userWeeks.has(toAddr)) userWeeks.set(toAddr, new Map());
-      const uw = userWeeks.get(toAddr);
-      uw.set(wk, (uw.get(wk) || 0n) + value);
-    }
-
-    state.lastProcessedBlock = Number(to);
-    writeJsonAtomic(PATH_STATE, state);
-
-    from = to + 1n;
-    await sleep(PAUSE_MS_BETWEEN_CHUNKS);
-  }
-
+  // Build sorted week keys from the totals map
   const allWeekKeys = Array.from(weekTotals.keys()).sort();
   if (allWeekKeys.length === 0) {
     console.log('No transfers found from distributor. Check addresses and start block.');
@@ -394,9 +429,7 @@ async function main() {
   const latestWeekTotal = weekTotals.get(latestWeekKey) || 0n;
   const latestWeekUniqueUsers = (weekUsers.get(latestWeekKey) || new Set()).size;
 
-  // -----------------------------
-  // FIXED: BREAKDOWN BUCKETS BY USER WEEKLY TOTAL (NOT PER TRANSFER)
-  // -----------------------------
+  // Breakdown buckets for latest week (by user total)
   const latestWeekUsers = weekUsers.get(latestWeekKey) || new Set();
   const bucketCounts = new Map(); // weeklyTotalBigInt -> countUsers
 
@@ -426,9 +459,6 @@ async function main() {
     },
   };
 
-  // -----------------------------
-  // FIXED: WEEKLY TABLE WITH week_number + week_label + numeric totals
-  // -----------------------------
   const weekly = {
     generated_at_utc: new Date().toISOString(),
     week_keys: allWeekKeys,
@@ -473,16 +503,13 @@ async function main() {
   const allTimeRows = [];
   for (const [addr, total] of userAllTime.entries()) {
     const weeksMap = userWeeks.get(addr) || new Map();
-    const weeksEarned = Array.from(weeksMap.entries())
-      .filter(([, v]) => v > 0n)
-      .map(([wk]) => wk)
-      .sort();
-
     const weeksObj = {};
     for (const wk of allWeekKeys) {
       const v = weeksMap.get(wk) || 0n;
       if (v > 0n) weeksObj[wk] = usdcToString(v);
     }
+
+    const weeksEarned = Object.keys(weeksObj).sort();
 
     allTimeRows.push({
       address: addr,

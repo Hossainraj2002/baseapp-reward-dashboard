@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-01-22T17:44:29.736Z",
+  "generated_at_utc": "2026-01-23T03:25:34.939Z",
   "chain": "base",
   "token": {
     "symbol": "USDC",
@@ -9,8 +9,8 @@
   "reward_distributor": "0x3D483c284bA397c1aB05E7f74593a79952a812ac",
   "first_reward_block": "33259888",
   "all_time": {
-    "total_usdc": "12385",
-    "unique_users": 1955
+    "total_usdc": "429786",
+    "unique_users": 16622
   },
   "latest_week": {
     "week_start_utc": "2026-01-21",
