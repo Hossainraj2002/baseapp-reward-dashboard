@@ -5,9 +5,6 @@ import Link from 'next/link';
 import { useMiniKit } from '@coinbase/onchainkit/minikit';
 import { Identity, Avatar, Name, Address } from '@coinbase/onchainkit/identity';
 
-/**
- * API payload returned by /api/profile
- */
 type ProfileOk = {
   address: string;
   allTime: { total_usdc: string; rank: number | null; weeks_earned: number };
@@ -15,45 +12,59 @@ type ProfileOk = {
 };
 
 type ProfileErr = { error: string };
-
 type ProfileApiResponse = ProfileOk | ProfileErr;
 
-/**
- * Safe helpers for reading unknown nested objects.
- */
 type UnknownRecord = Record<string, unknown>;
 
 function isRecord(v: unknown): v is UnknownRecord {
   return typeof v === 'object' && v !== null;
 }
 
-function getNestedString(obj: unknown, path: string[]): string | null {
+function getNestedUnknown(obj: unknown, path: string[]): unknown {
   let cur: unknown = obj;
   for (const key of path) {
     if (!isRecord(cur)) return null;
     cur = cur[key];
   }
-  return typeof cur === 'string' ? cur : null;
+  return cur;
+}
+
+function getNestedString(obj: unknown, path: string[]): string | null {
+  const v = getNestedUnknown(obj, path);
+  return typeof v === 'string' ? v : null;
+}
+
+function getNestedStringFromArray0(obj: unknown, pathToArray: string[]): string | null {
+  const v = getNestedUnknown(obj, pathToArray);
+  if (!Array.isArray(v)) return null;
+  const first = v[0];
+  return typeof first === 'string' ? first : null;
 }
 
 function isEvmAddress(v: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/.test(v);
 }
 
-/**
- * Try to read a wallet address from MiniKit context, across common key variations.
- * Note: context shape can vary across versions/clients, so we treat it as unknown.
- */
 function pickWalletAddressFromContext(ctx: unknown): string | null {
   const candidates: Array<string | null> = [
+    // direct fields
     getNestedString(ctx, ['user', 'address']),
     getNestedString(ctx, ['user', 'walletAddress']),
     getNestedString(ctx, ['user', 'custodyAddress']),
     getNestedString(ctx, ['user', 'verifiedAddress']),
     getNestedString(ctx, ['user', 'connectedAddress']),
-    // Some clients may nest differently
-    getNestedString(ctx, ['interactor', 'address']),
     getNestedString(ctx, ['viewer', 'address']),
+    getNestedString(ctx, ['interactor', 'address']),
+
+    // common MiniKit verified address arrays (snake_case)
+    getNestedStringFromArray0(ctx, ['user', 'verified_addresses', 'eth_addresses']),
+    getNestedStringFromArray0(ctx, ['interactor', 'verified_addresses', 'eth_addresses']),
+    getNestedStringFromArray0(ctx, ['viewer', 'verified_addresses', 'eth_addresses']),
+
+    // common MiniKit verified address arrays (camelCase)
+    getNestedStringFromArray0(ctx, ['user', 'verifiedAddresses', 'ethAddresses']),
+    getNestedStringFromArray0(ctx, ['interactor', 'verifiedAddresses', 'ethAddresses']),
+    getNestedStringFromArray0(ctx, ['viewer', 'verifiedAddresses', 'ethAddresses']),
   ];
 
   const addr = candidates.find((v): v is string => typeof v === 'string' && isEvmAddress(v));
@@ -83,18 +94,17 @@ export default function ProfileConnectedClient() {
       const res = await fetch(`/api/profile?address=${encodeURIComponent(address)}`, { cache: 'no-store' });
       const json = (await res.json()) as unknown;
 
-      // Basic runtime validation
       if (isRecord(json) && typeof json.error === 'string') {
         setData({ error: json.error });
       } else if (
         isRecord(json) &&
         typeof json.address === 'string' &&
         isRecord(json.allTime) &&
-        typeof json.allTime.total_usdc === 'string' &&
-        typeof json.allTime.weeks_earned === 'number' &&
+        typeof (json.allTime as UnknownRecord).total_usdc === 'string' &&
+        typeof (json.allTime as UnknownRecord).weeks_earned === 'number' &&
         isRecord(json.latestWeek) &&
-        typeof json.latestWeek.week_start_utc === 'string' &&
-        typeof json.latestWeek.amount_usdc === 'string'
+        typeof (json.latestWeek as UnknownRecord).week_start_utc === 'string' &&
+        typeof (json.latestWeek as UnknownRecord).amount_usdc === 'string'
       ) {
         setData(json as ProfileOk);
       } else {
@@ -109,7 +119,6 @@ export default function ProfileConnectedClient() {
 
   useEffect(() => {
     if (connectedAddress) loadProfile(connectedAddress);
-    // intentionally only when address changes
   }, [connectedAddress]);
 
   const addressToShow = connectedAddress || manualAddress.trim();
@@ -123,7 +132,6 @@ export default function ProfileConnectedClient() {
         </Link>
       </div>
 
-      {/* If Base App doesn't provide wallet address yet, allow manual */}
       {!connectedAddress ? (
         <div className="card card-pad" style={{ marginTop: 12, border: '2px solid #0000FF' }}>
           <div style={{ fontWeight: 900 }}>Wallet not detected</div>
@@ -158,9 +166,7 @@ export default function ProfileConnectedClient() {
         </div>
       ) : (
         <div className="card card-pad" style={{ marginTop: 12 }}>
-          <div className="subtle" style={{ marginBottom: 8 }}>
-            Connected
-          </div>
+          <div className="subtle" style={{ marginBottom: 8 }}>Connected</div>
           <Identity address={connectedAddress as `0x${string}`}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <Avatar />
@@ -177,16 +183,13 @@ export default function ProfileConnectedClient() {
         </div>
       )}
 
-      {/* Data */}
       <div style={{ marginTop: 12 }}>
         {loading ? (
           <div className="card card-pad">Loading…</div>
         ) : data && 'error' in data ? (
           <div className="card card-pad" style={{ border: '2px solid #0000FF' }}>
             <div style={{ fontWeight: 900 }}>Failed to load profile</div>
-            <div className="subtle" style={{ marginTop: 6 }}>
-              {data.error}
-            </div>
+            <div className="subtle" style={{ marginTop: 6 }}>{data.error}</div>
           </div>
         ) : data && !('error' in data) ? (
           <div className="card card-pad">
@@ -207,9 +210,7 @@ export default function ProfileConnectedClient() {
             <div style={{ marginTop: 12 }} className="subtle">
               Latest week:{' '}
               <span style={{ fontWeight: 900, color: '#0A0A0A' }}>{data.latestWeek.week_start_utc}</span> —{' '}
-              <span style={{ fontWeight: 900, color: '#0A0A0A' }}>
-                ${formatNumberString(data.latestWeek.amount_usdc)}
-              </span>
+              <span style={{ fontWeight: 900, color: '#0A0A0A' }}>${formatNumberString(data.latestWeek.amount_usdc)}</span>
             </div>
 
             <div style={{ marginTop: 12 }}>
