@@ -1,52 +1,49 @@
 import FrameReady from '@/components/FrameReady';
 import ProfileView from '@/components/ProfileView';
+import { getAddress } from 'viem';
+import Link from 'next/link';
 import { buildProfilePayload } from '@/lib/profilePayload';
 
-type PageProps = {
-  params: { address: string };
-};
+function safeChecksumAddress(input: string) {
+  try {
+    return getAddress(input);
+  } catch {
+    return null;
+  }
+}
 
-function isEvmAddress(s: string) {
+function isAddressLike(s: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(s);
 }
 
-export default async function FindAddressPage({ params }: PageProps) {
-  const address = params.address;
+// NOTE: Next.js 15.3.x expects params to be a Promise in type checking for dynamic routes.
+export default async function FindAddressPage({
+  params,
+}: {
+  params: Promise<{ address: string }>;
+}) {
+  const { address: addrRaw } = await params;
 
-  // Always render readiness call first
-  if (!isEvmAddress(address)) {
+  if (!isAddressLike(addrRaw)) {
     return (
-      <main style={{ maxWidth: 420, margin: '0 auto', padding: 16, paddingBottom: 28, background: '#FFFFFF' }}>
+      <main style={{ maxWidth: 420, margin: '0 auto', padding: 16 }}>
         <FrameReady />
-        <div className="card card-pad" style={{ border: '2px solid #0000FF' }}>
-          <div style={{ fontWeight: 900 }}>Invalid address</div>
-          <div className="subtle" style={{ marginTop: 6 }}>
-            Expected a valid EVM address like <span style={{ fontWeight: 900 }}>0x...</span>
-          </div>
+        <div style={{ fontSize: 16, fontWeight: 900 }}>Invalid address</div>
+        <div style={{ marginTop: 8, opacity: 0.75 }}>Address must be formatted like 0x...</div>
+        <div style={{ marginTop: 12 }}>
+          <Link href="/find">Back</Link>
         </div>
       </main>
     );
   }
 
-  const data = buildProfilePayload(address);
-
-  // ✅ Prevent unhandled error
-  if ('error' in data) {
-    return (
-      <main style={{ maxWidth: 420, margin: '0 auto', padding: 16, paddingBottom: 28, background: '#FFFFFF' }}>
-        <FrameReady />
-        <div className="card card-pad" style={{ border: '2px solid #0000FF' }}>
-          <div style={{ fontWeight: 900 }}>Could not load this address</div>
-          <div className="subtle" style={{ marginTop: 6 }}>{String(data.error)}</div>
-        </div>
-      </main>
-    );
-  }
+  const address = safeChecksumAddress(addrRaw) ?? addrRaw;
+  const payload = buildProfilePayload(address);
 
   return (
-    <main style={{ maxWidth: 420, margin: '0 auto', padding: 16, paddingBottom: 28, background: '#FFFFFF' }}>
+    <main style={{ maxWidth: 420, margin: '0 auto', padding: 16, paddingBottom: 28 }}>
       <FrameReady />
-      <ProfileView data={data} />
+      <ProfileView data={payload} />
     </main>
   );
 }
