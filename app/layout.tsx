@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import '@coinbase/onchainkit/styles.css';
 import RootProvider from './rootProvider';
 import FrameReady from '@/components/FrameReady';
 import './globals.css';
