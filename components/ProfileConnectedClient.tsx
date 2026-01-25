@@ -107,7 +107,7 @@ export default function ProfileConnectedClient() {
 
   useEffect(() => {
     if (activeAddress) loadProfile(activeAddress);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [activeAddress]);
 
   const showManualInput = !activeAddress; // if nothing detected, show paste box
