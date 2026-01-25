@@ -3,11 +3,43 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 
-import { Wallet, ConnectWallet, WalletDropdown } from '@coinbase/onchainkit/wallet';
-import { useAccount } from 'wagmi';
 import { useMiniKit } from '@coinbase/onchainkit/minikit';
+import { Wallet, ConnectWallet, WalletDropdown } from '@coinbase/onchainkit/wallet';
+import { Identity, Avatar, Name, Address } from '@coinbase/onchainkit/identity';
 
-import type { ProfilePayload } from '@/lib/profilePayload';
+import { useAccount } from 'wagmi';
+import CopyButton from '@/components/CopyButton';
+import ProfileView from '@/components/ProfileView';
+
+type ProfilePayload = {
+  address: string;
+  farcaster: null | {
+    fid: number;
+    username: string;
+    pfp_url: string | null;
+  };
+  reward_summary: {
+    all_time_usdc: number;
+    total_weeks_earned: number;
+    latest_week_usdc: number;
+    latest_week_start_utc: string;
+    latest_week_label: string;
+    previous_week_usdc: number;
+    previous_week_start_utc: string | null;
+    previous_week_label: string | null;
+    pct_change: string | null;
+  };
+  reward_history: Array<{
+    week_start_utc: string;
+    week_label: string;
+    week_number: number;
+    usdc: number;
+  }>;
+  meta: {
+    created_by: string;
+    support_address: string;
+  };
+};
 
 type ProfileApiResponse = ProfilePayload | { error: string };
 
@@ -15,25 +47,49 @@ function isEvmAddress(s: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(s);
 }
 
+function pickContextAddress(
+  context: unknown
+): string | null {
+  const ctx = context as {
+    user?: {
+      verified_addresses?: { eth_addresses?: string[] };
+      custody_address?: string;
+      address?: string;
+      walletAddress?: string;
+      connectedAddress?: string;
+    };
+  };
+
+  const candidates = [
+    ctx?.user?.verified_addresses?.eth_addresses?.[0],
+    ctx?.user?.custody_address,
+    ctx?.user?.address,
+    ctx?.user?.walletAddress,
+    ctx?.user?.connectedAddress,
+  ].filter(Boolean) as string[];
+
+  const addr = candidates.find((v) => isEvmAddress(v));
+  return addr ?? null;
+}
+
 export default function ProfileConnectedClient() {
   const { context } = useMiniKit();
-  const fid = useMemo(() => {
-    const raw = (context as unknown as { user?: { fid?: string | number } })?.user?.fid;
-    const n = raw == null ? NaN : Number(raw);
-    return Number.isFinite(n) ? n : null;
-  }, [context]);
+  const { address: wagmiAddress, isConnected } = useAccount();
 
-  const { address, isConnected } = useAccount();
+  // We still “use” MiniKit identity under the hood (FID / context),
+  // but we do NOT show it as a big section in UI.
+  const contextAddress = useMemo(() => pickContextAddress(context), [context]);
 
   const [manualAddress, setManualAddress] = useState('');
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ProfileApiResponse | null>(null);
 
-  const addressToQuery = useMemo(() => {
-    if (isConnected && address) return address;
+  const activeAddress = useMemo(() => {
+    if (isConnected && wagmiAddress) return wagmiAddress;
+    if (contextAddress) return contextAddress;
     const m = manualAddress.trim();
     return isEvmAddress(m) ? (m as `0x${string}`) : null;
-  }, [isConnected, address, manualAddress]);
+  }, [isConnected, wagmiAddress, contextAddress, manualAddress]);
 
   async function loadProfile(addr: string) {
     setLoading(true);
@@ -50,11 +106,15 @@ export default function ProfileConnectedClient() {
   }
 
   useEffect(() => {
-    if (addressToQuery) loadProfile(addressToQuery);
-  }, [addressToQuery]);
+    if (activeAddress) loadProfile(activeAddress);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAddress]);
+
+  const showManualInput = !activeAddress; // if nothing detected, show paste box
 
   return (
     <div>
+      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <h1 style={{ margin: 0 }}>Profile</h1>
         <Link href="/find" className="btn">
@@ -62,33 +122,67 @@ export default function ProfileConnectedClient() {
         </Link>
       </div>
 
-      {/* MiniKit identity (FID) */}
+      {/* Identity / address card */}
       <div className="card card-pad" style={{ marginTop: 12 }}>
         <div className="subtle" style={{ marginBottom: 8 }}>
-          MiniKit identity (FID)
+          Your address
         </div>
-        <div style={{ fontWeight: 900 }}>{fid ? `FID: ${fid}` : 'FID not available on this device'}</div>
-        <div className="subtle" style={{ marginTop: 6 }}>
-          We will use FID later to fetch social data via Neynar. Wallet address alone is not enough for Farcaster profile.
-        </div>
+
+        {activeAddress ? (
+          <>
+            <Identity address={activeAddress as `0x${string}`}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Avatar />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 900 }}>
+                    <Name />
+                  </div>
+                  <div className="subtle" style={{ marginTop: 2 }}>
+                    <Address />
+                  </div>
+                </div>
+              </div>
+            </Identity>
+
+            {/* Full address + copy */}
+            <div
+              style={{
+                marginTop: 12,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 900, wordBreak: 'break-all', color: '#0A0A0A' }}>
+                {activeAddress}
+              </div>
+              <CopyButton value={activeAddress} mode="icon" />
+            </div>
+          </>
+        ) : (
+          <div className="subtle">
+            Wallet not detected yet. Paste an address below to view stats.
+          </div>
+        )}
       </div>
 
-      {/* Wallet connect */}
-      <div className="card card-pad" style={{ marginTop: 12, border: '2px solid #0000FF' }}>
-        <div style={{ fontWeight: 900, marginBottom: 8 }}>Wallet</div>
-
+      {/* Wallet connect (small + optional, not a big section) */}
+      <div style={{ marginTop: 10 }}>
         <Wallet>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <ConnectWallet className="btn" />
             <WalletDropdown />
           </div>
         </Wallet>
+      </div>
 
-        {/* Base App may block popups → manual is prominent */}
-        <div style={{ marginTop: 12 }}>
-          <div style={{ fontWeight: 900 }}>{isConnected && address ? 'Connected' : 'Wallet not connected'}</div>
+      {/* Manual address fallback (only when nothing detected) */}
+      {showManualInput ? (
+        <div className="card card-pad" style={{ marginTop: 12, border: '2px solid #0000FF' }}>
+          <div style={{ fontWeight: 900 }}>Paste address</div>
           <div className="subtle" style={{ marginTop: 6 }}>
-            If wallet connect popups are blocked inside Base App, paste your address here to view stats.
+            If wallet popups are blocked inside Base App, this always works.
           </div>
 
           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
@@ -115,16 +209,10 @@ export default function ProfileConnectedClient() {
               Load
             </button>
           </div>
-
-          {isConnected && address ? (
-            <div className="subtle" style={{ marginTop: 10 }}>
-              Connected address: <span style={{ fontWeight: 900, color: '#0A0A0A' }}>{address}</span>
-            </div>
-          ) : null}
         </div>
-      </div>
+      ) : null}
 
-      {/* Stats */}
+      {/* Data */}
       <div style={{ marginTop: 12 }}>
         {loading ? (
           <div className="card card-pad">Loading…</div>
@@ -134,35 +222,15 @@ export default function ProfileConnectedClient() {
             <div className="subtle" style={{ marginTop: 6 }}>{data.error}</div>
           </div>
         ) : data && !('error' in data) ? (
-          <div className="card card-pad">
-            <div style={{ fontWeight: 900, marginBottom: 10 }}>Stats</div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <div style={{ borderRadius: 14, padding: 12, background: '#0000FF', color: '#fff', fontWeight: 900 }}>
-                <div style={{ fontSize: 12, opacity: 0.95 }}>All-time USDC</div>
-                <div style={{ fontSize: 18 }}>${data.reward_summary.all_time_usdc.toLocaleString()}</div>
-              </div>
-
-              <div style={{ borderRadius: 14, padding: 12, background: '#0000FF', color: '#fff', fontWeight: 900 }}>
-                <div style={{ fontSize: 12, opacity: 0.95 }}>Weeks earned</div>
-                <div style={{ fontSize: 18 }}>{data.reward_summary.total_weeks_earned}</div>
-              </div>
-            </div>
-
-            <div style={{ marginTop: 12 }} className="subtle">
-              Latest week:{' '}
-              <span style={{ fontWeight: 900, color: '#0A0A0A' }}>{data.reward_summary.latest_week_label}</span> —{' '}
-              <span style={{ fontWeight: 900, color: '#0A0A0A' }}>
-                ${data.reward_summary.latest_week_usdc.toLocaleString()}
-              </span>
-            </div>
-
+          <>
+            {/* Reuse same proven layout used by Find /address */}
+            <ProfileView data={data} showBackLink={false} />
             <div style={{ marginTop: 12 }}>
               <Link className="btn" href={`/find/${encodeURIComponent(data.address)}`}>
                 Open in Find
               </Link>
             </div>
-          </div>
+          </>
         ) : null}
       </div>
     </div>
