@@ -1,12 +1,14 @@
-import FindClient from '../../components/FindClient';
+import FrameReady from '@/components/FrameReady';
+import FindClient from '@/components/FindClient';
 
-export default function Page() {
+export default function FindPage() {
   return (
-    <main className="page" style={{ paddingBottom: 28 }}>
-      <h1 className="h1">Find a wallet</h1>
-      <p className="subtle" style={{ marginTop: 6 }}>
-        Paste an Ethereum address (0x...) to view rewards.
-      </p>
+    <main style={{ maxWidth: 420, margin: '0 auto', padding: 16, paddingBottom: 28, background: '#FFFFFF' }}>
+      <FrameReady />
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+        <div style={{ fontSize: 18, fontWeight: 900, color: '#0000FF' }}>Find</div>
+      </div>
 
       <div style={{ marginTop: 12 }}>
         <FindClient />

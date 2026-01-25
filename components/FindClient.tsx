@@ -3,36 +3,56 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
+function isEvmAddress(s: string) {
+  return /^0x[a-fA-F0-9]{40}$/.test(s);
+}
+
 export default function FindClient() {
   const router = useRouter();
-  const [address, setAddress] = useState('');
+  const [value, setValue] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
-  function handleGo() {
-    const trimmed = address.trim();
-    if (!/^0x[a-fA-F0-9]{40}$/.test(trimmed)) return;
-    router.push(`/find/${encodeURIComponent(trimmed)}`);
+  function go() {
+    const addr = value.trim();
+    if (!isEvmAddress(addr)) {
+      setError('Invalid address. Must be 0x...');
+      return;
+    }
+    setError(null);
+    router.push(`/find/${encodeURIComponent(addr)}`);
   }
 
   return (
-    <div className="card card-pad" style={{ border: '2px solid #0000FF' }}>
-      <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 8 }}>Search by address</div>
+    <div className="card card-pad">
+      <div style={{ fontSize: 14, fontWeight: 900, color: '#0000FF' }}>Find by address</div>
 
-      <input
-        value={address}
-        onChange={(e) => setAddress(e.target.value)}
-        placeholder="0x..."
-        style={{
-          width: '100%',
-          border: '1px solid rgba(10,10,10,0.2)',
-          borderRadius: 12,
-          padding: '10px 12px',
-          fontWeight: 800,
-        }}
-      />
+      <div className="subtle" style={{ marginTop: 6 }}>
+        Paste a Base (EVM) address to view rewards profile.
+      </div>
 
-      <button className="btn" style={{ marginTop: 10, width: '100%' }} onClick={handleGo}>
-        Find
-      </button>
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="0x..."
+          style={{
+            flex: 1,
+            border: '1px solid rgba(10,10,10,0.2)',
+            borderRadius: 12,
+            padding: '10px 12px',
+            fontWeight: 800,
+          }}
+        />
+        <button className="btn" onClick={go}>
+          Search
+        </button>
+      </div>
+
+      {error ? (
+        <div className="subtle" style={{ marginTop: 10, color: '#6B7280' }}>
+          {error}
+        </div>
+      ) : null}
     </div>
   );
 }

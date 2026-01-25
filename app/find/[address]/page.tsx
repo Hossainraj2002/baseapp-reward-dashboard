@@ -1,8 +1,8 @@
 import FrameReady from '@/components/FrameReady';
 import ProfileView from '@/components/ProfileView';
+import { buildProfilePayload } from '@/lib/profilePayload';
 import { getAddress } from 'viem';
 import Link from 'next/link';
-import { buildProfilePayload } from '@/lib/profilePayload';
 
 function safeChecksumAddress(input: string) {
   try {
@@ -16,7 +16,6 @@ function isAddressLike(s: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(s);
 }
 
-// NOTE: Next.js 15.3.x expects params to be a Promise in type checking for dynamic routes.
 export default async function FindAddressPage({
   params,
 }: {

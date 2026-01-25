@@ -1,47 +1,38 @@
 import fs from 'fs';
 import path from 'path';
 
-type OverviewJson = {
-  latest_week: {
-    week_start_utc: string;
-    week_end_utc?: string;
-  };
-};
-
-type WeeklyRow = {
-  week_number: number;
-  week_label: string;
-  week_start_utc: string; // YYYY-MM-DD
-  week_end_utc: string;
-  total_usdc_amount: number;
-  total_unique_users: number;
-};
-
 type WeeklyJson = {
-  week_keys: string[];
-  weeks: WeeklyRow[];
+  weeks: Array<{
+    week_number: number;
+    week_label: string;
+    week_start_utc: string; // "YYYY-MM-DD"
+    week_end_utc: string;
+    total_usdc_amount: number;
+    total_unique_users: number;
+  }>;
 };
 
-type AllTimeRow = {
-  address: string;
-  total_usdc: string;
-  total_weeks_earned?: number;
-  weeks: Record<string, string>; // weekKey -> usdc
+type AllTimeLeaderboardJson = {
+  rows: Array<{
+    address: string;
+    total_usdc: string;
+    total_weeks_earned: number;
+    weeks?: Record<string, string>;
+  }>;
 };
 
-type LeaderboardAllTimeJson = {
-  week_keys: string[];
-  rows: AllTimeRow[];
+type WeeklyLatestLeaderboardJson = {
+  latest_week_start_utc: string;
+  previous_week_start_utc: string | null;
+  rows: Array<{
+    address: string;
+    this_week_usdc: string;
+    previous_week_usdc?: string;
+    pct_change?: string | null;
+    all_time_usdc: string;
+    rank: number;
+  }>;
 };
-
-type FarcasterMapJson = Record<
-  string,
-  {
-    fid: number;
-    username: string;
-    pfp_url?: string;
-  }
->;
 
 export type ProfilePayload = {
   address: string;
@@ -53,12 +44,16 @@ export type ProfilePayload = {
   reward_summary: {
     all_time_usdc: number;
     total_weeks_earned: number;
+
     latest_week_usdc: number;
     latest_week_start_utc: string;
     latest_week_label: string;
+
     previous_week_usdc: number;
     previous_week_start_utc: string | null;
     previous_week_label: string | null;
+
+    pct_change: string | null; // percent string like "12.3"
   };
   reward_history: Array<{
     week_start_utc: string;
@@ -72,97 +67,108 @@ export type ProfilePayload = {
   };
 };
 
-function readJson<T>(relPath: string): T {
-  const p = path.join(process.cwd(), relPath);
-  return JSON.parse(fs.readFileSync(p, 'utf8')) as T;
-}
-
-function num(s?: string) {
-  const n = Number(s ?? '0');
+function num(x: unknown): number {
+  const n = typeof x === 'string' ? Number(x) : typeof x === 'number' ? x : NaN;
   return Number.isFinite(n) ? n : 0;
 }
 
-export function buildProfilePayload(address: string): ProfilePayload {
-  const overview = readJson<OverviewJson>('data/overview.json');
-  const weekly = readJson<WeeklyJson>('data/weekly.json');
-  const allTime = readJson<LeaderboardAllTimeJson>('data/leaderboard_all_time.json');
-
-  let farcasterMap: FarcasterMapJson = {};
+function readJson<T>(fileRel: string, fallback: T): T {
   try {
-    farcasterMap = readJson<FarcasterMapJson>('data/farcaster_map.json');
+    const p = path.join(process.cwd(), 'data', fileRel);
+    if (!fs.existsSync(p)) return fallback;
+    return JSON.parse(fs.readFileSync(p, 'utf8')) as T;
   } catch {
-    farcasterMap = {};
+    return fallback;
+  }
+}
+
+export function buildProfilePayload(address: string): ProfilePayload {
+  const weekly = readJson<WeeklyJson>('weekly.json', { weeks: [] });
+  const allTime = readJson<AllTimeLeaderboardJson>('leaderboard_all_time.json', { rows: [] });
+  const weeklyLatest = readJson<WeeklyLatestLeaderboardJson>('leaderboard_weekly_latest.json', {
+    latest_week_start_utc: '',
+    previous_week_start_utc: null,
+    rows: [],
+  });
+
+  const addrLower = address.toLowerCase();
+
+  const latestWeekKey = weeklyLatest.latest_week_start_utc || (weekly.weeks.at(-1)?.week_start_utc ?? '');
+  const prevWeekKey =
+    weeklyLatest.previous_week_start_utc ??
+    (weekly.weeks.length >= 2 ? weekly.weeks[weekly.weeks.length - 2].week_start_utc : null);
+
+  const latestWeek = weekly.weeks.find((w) => w.week_start_utc === latestWeekKey) || null;
+  const prevWeek = prevWeekKey ? weekly.weeks.find((w) => w.week_start_utc === prevWeekKey) || null : null;
+
+  const userAllTime = allTime.rows.find((r) => r.address.toLowerCase() === addrLower) || null;
+  const userLatestRow = weeklyLatest.rows.find((r) => r.address.toLowerCase() === addrLower) || null;
+
+  const allTimeTotal = userAllTime ? num(userAllTime.total_usdc) : 0;
+
+  // Best source of weekly amounts:
+  // - indexer stores per-week totals in all_time row: weeks[wk] (if present)
+  // - else fall back to weekly_latest row fields
+  const latestWeekTotal =
+    (userAllTime?.weeks && latestWeekKey && userAllTime.weeks[latestWeekKey] != null
+      ? num(userAllTime.weeks[latestWeekKey])
+      : userLatestRow
+        ? num(userLatestRow.this_week_usdc)
+        : 0);
+
+  const prevWeekTotal =
+    prevWeekKey && userAllTime?.weeks && userAllTime.weeks[prevWeekKey] != null
+      ? num(userAllTime.weeks[prevWeekKey])
+      : userLatestRow?.previous_week_usdc != null
+        ? num(userLatestRow.previous_week_usdc)
+        : 0;
+
+  const totalWeeksEarned = userAllTime?.total_weeks_earned ?? (userAllTime?.weeks ? Object.keys(userAllTime.weeks).length : 0);
+
+  // ✅ Bug 1 fix: pct_change
+  const pctChange =
+    prevWeekTotal > 0 ? (((latestWeekTotal - prevWeekTotal) / prevWeekTotal) * 100).toFixed(1) : null;
+
+  // Reward history (from all_time weeks map if available)
+  const history: ProfilePayload['reward_history'] = [];
+  const weeksMap = userAllTime?.weeks || {};
+
+  for (const w of weekly.weeks) {
+    const v = weeksMap[w.week_start_utc];
+    if (v == null) continue;
+    const usdc = num(v);
+    if (usdc <= 0) continue;
+
+    history.push({
+      week_start_utc: w.week_start_utc,
+      week_label: w.week_label,
+      week_number: w.week_number,
+      usdc,
+    });
   }
 
-  const weekMetaByKey = new Map<string, WeeklyRow>();
-  for (const w of weekly.weeks) weekMetaByKey.set(w.week_start_utc, w);
-
-  const user =
-    allTime.rows.find((r) => r.address.toLowerCase() === address.toLowerCase()) ?? null;
-
-  const latestWeekKey = overview.latest_week.week_start_utc;
-  const latestWeek = weekMetaByKey.get(latestWeekKey) ?? null;
-
-  const prevWeek = latestWeek
-    ? weekly.weeks.find((w) => w.week_number === latestWeek.week_number - 1) ?? null
-    : null;
-
-  const prevWeekKey = prevWeek?.week_start_utc ?? null;
-
-  const allTimeTotal = user ? num(user.total_usdc) : 0;
-  const latestWeekTotal = user ? num(user.weeks?.[latestWeekKey]) : 0;
-  const prevWeekTotal = prevWeekKey && user ? num(user.weeks?.[prevWeekKey]) : 0;
-
-  const history: Array<{
-    week_start_utc: string;
-    week_label: string;
-    week_number: number;
-    usdc: number;
-  }> = [];
-
-  if (user && user.weeks) {
-    for (const wk of Object.keys(user.weeks)) {
-      const meta = weekMetaByKey.get(wk);
-      if (!meta) continue;
-      const usdc = num(user.weeks[wk]);
-      if (usdc <= 0) continue;
-      history.push({
-        week_start_utc: wk,
-        week_label: meta.week_label,
-        week_number: meta.week_number,
-        usdc,
-      });
-    }
-  }
-
-  history.sort((a, b) => b.week_number - a.week_number);
-
-  const totalWeeksEarned = user?.total_weeks_earned ?? (user ? history.length : 0);
-
-  const fc = farcasterMap[address.toLowerCase()] || farcasterMap[address] || null;
+  history.sort((a, b) => a.week_number - b.week_number);
 
   return {
     address,
-    farcaster: fc
-      ? {
-          fid: fc.fid,
-          username: fc.username,
-          pfp_url: fc.pfp_url || null,
-        }
-      : null,
+    farcaster: null, // we will add Neynar later (needs FID/auth flow)
     reward_summary: {
       all_time_usdc: allTimeTotal,
       total_weeks_earned: totalWeeksEarned,
+
       latest_week_usdc: latestWeekTotal,
       latest_week_start_utc: latestWeekKey,
       latest_week_label: latestWeek?.week_label || latestWeekKey,
+
       previous_week_usdc: prevWeekTotal,
       previous_week_start_utc: prevWeekKey,
-      previous_week_label: prevWeek?.week_label || null,
+      previous_week_label: prevWeek?.week_label || (prevWeekKey ? prevWeekKey : null),
+
+      pct_change: pctChange,
     },
     reward_history: history,
     meta: {
-      created_by: 'Akbar',
+      created_by: '🅰️kbar',
       support_address: '0xd4a1D777e2882487d47c96bc23A47CeaB4f4f18A',
     },
   };
