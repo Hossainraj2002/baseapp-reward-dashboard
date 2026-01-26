@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { useMiniKit } from '@coinbase/onchainkit/minikit';
 import { useAccount } from 'wagmi';
 import CopyButton from '@/components/CopyButton';
@@ -77,11 +76,7 @@ function pickAddressFromMiniKitContext(ctx: unknown): string | null {
     };
   };
 
-  const a =
-    c?.user?.verified_addresses?.eth_addresses?.[0] ||
-    c?.user?.custody_address ||
-    null;
-
+  const a = c?.user?.verified_addresses?.eth_addresses?.[0] || c?.user?.custody_address || null;
   return typeof a === 'string' && isEvmAddress(a) ? a : null;
 }
 
@@ -97,7 +92,6 @@ export default function ProfileDashboardClient() {
   const { address: wagmiAddress, isConnected } = useAccount();
 
   const fid = useMemo(() => pickFidFromMiniKitContext(context), [context]);
-
   const addressFromContext = useMemo(() => pickAddressFromMiniKitContext(context), [context]);
 
   const addressToQuery = useMemo(() => {
@@ -167,21 +161,24 @@ export default function ProfileDashboardClient() {
   }, [fid, profile]);
 
   const finalAddress = useMemo(() => {
+    if (profile && !('error' in profile)) return profile.address;
     if (addressToQuery) return addressToQuery;
     const m = manualAddress.trim();
     return isEvmAddress(m) ? m : null;
-  }, [addressToQuery, manualAddress]);
+  }, [profile, addressToQuery, manualAddress]);
 
   const headerName =
-    social && !('error' in social) ? (social.user.display_name || social.user.username || 'Profile') : 'Profile';
+    social && !('error' in social) ? social.user.display_name || social.user.username || 'Profile' : 'Profile';
   const headerUsername =
     social && !('error' in social) ? (social.user.username ? `@${social.user.username}` : null) : null;
-  const headerPfp =
-    social && !('error' in social) ? social.user.pfp_url : null;
+  const headerPfp = social && !('error' in social) ? social.user.pfp_url : null;
+
+  const showChangeAddressButton =
+    (!profileLoading && !!finalAddress) || (!profileLoading && (!addressToQuery || (profile && 'error' in profile)));
 
   return (
     <div className="page" style={{ paddingBottom: 28 }}>
-      {/* Header */}
+      {/* Header (NO Find button here anymore) */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div
@@ -202,19 +199,66 @@ export default function ProfileDashboardClient() {
           </div>
 
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 18, fontWeight: 900, color: '#0A0A0A', lineHeight: 1.2 }}>
-              {headerName}
-            </div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: '#0A0A0A', lineHeight: 1.2 }}>{headerName}</div>
             <div className="subtle" style={{ marginTop: 2 }}>
               {headerUsername ? headerUsername : finalAddress ? shortAddress(finalAddress) : 'Wallet not detected'}
             </div>
           </div>
         </div>
 
-        <Link href="/find" className="btn">
-          Find
-        </Link>
+        {showChangeAddressButton ? (
+          <button className="btn" onClick={() => setShowManual((v) => !v)}>
+            {showManual ? 'Close' : 'Change address'}
+          </button>
+        ) : null}
       </div>
+
+      {/* Collapsed wallet/address panel (only when user taps "Change address") */}
+      {showManual ? (
+        <div className="card card-pad" style={{ marginTop: 12, border: '2px solid #0000FF' }}>
+          <div style={{ fontWeight: 900, marginBottom: 8 }}>Wallet address</div>
+
+          {finalAddress ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              <div style={{ flex: 1, fontWeight: 900, wordBreak: 'break-all' }}>{finalAddress}</div>
+              <CopyButton value={finalAddress} mode="icon" />
+            </div>
+          ) : (
+            <div className="subtle" style={{ marginBottom: 12 }}>
+              No wallet detected. Paste an address below.
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              value={manualAddress}
+              onChange={(e) => setManualAddress(e.target.value)}
+              placeholder="0x..."
+              style={{
+                flex: 1,
+                border: '1px solid rgba(10,10,10,0.2)',
+                borderRadius: 12,
+                padding: '10px 12px',
+                fontWeight: 800,
+              }}
+            />
+            <button
+              className="btn"
+              onClick={() => {
+                const m = manualAddress.trim();
+                if (isEvmAddress(m)) {
+                  loadProfile(m);
+                  setShowManual(false);
+                } else {
+                  setProfile({ error: 'Invalid address. Expected 0x...' });
+                }
+              }}
+            >
+              Load
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* Followers / Following */}
       <div style={{ marginTop: 10 }}>
@@ -226,9 +270,7 @@ export default function ProfileDashboardClient() {
             <MiniStat title="Following" value={social.user.following_count.toLocaleString()} />
           </div>
         ) : (
-          <div className="subtle">
-            Social data not available{fid ? '' : ' (FID not detected)'}.
-          </div>
+          <div className="subtle">Social data not available{fid ? '' : ' (FID not detected)'}.</div>
         )}
       </div>
 
@@ -239,59 +281,20 @@ export default function ProfileDashboardClient() {
         ) : profile && 'error' in profile ? (
           <div className="card card-pad" style={{ border: '2px solid #0000FF' }}>
             <div style={{ fontWeight: 900 }}>Failed to load profile</div>
-            <div className="subtle" style={{ marginTop: 6 }}>{profile.error}</div>
+            <div className="subtle" style={{ marginTop: 6 }}>
+              {profile.error}
+            </div>
 
             {!addressToQuery ? (
               <div style={{ marginTop: 12 }}>
-                <button className="btn" onClick={() => setShowManual(true)}>Enter address</button>
+                <button className="btn" onClick={() => setShowManual(true)}>
+                  Enter address
+                </button>
               </div>
             ) : null}
           </div>
         ) : profile && !('error' in profile) ? (
           <>
-            {/* Address row (full + copy) */}
-            <div className="card card-pad" style={{ marginBottom: 12 }}>
-              <div className="subtle" style={{ marginBottom: 6 }}>Wallet address</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ flex: 1, fontWeight: 900, wordBreak: 'break-all' }}>{profile.address}</div>
-                <CopyButton value={profile.address} mode="icon" />
-              </div>
-
-              <div style={{ marginTop: 10 }}>
-                <button className="btn" onClick={() => setShowManual((v) => !v)}>
-                  {showManual ? 'Close' : 'Change address'}
-                </button>
-              </div>
-
-              {showManual ? (
-                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                  <input
-                    value={manualAddress}
-                    onChange={(e) => setManualAddress(e.target.value)}
-                    placeholder="0x..."
-                    style={{
-                      flex: 1,
-                      border: '1px solid rgba(10,10,10,0.2)',
-                      borderRadius: 12,
-                      padding: '10px 12px',
-                      fontWeight: 800,
-                    }}
-                  />
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      const m = manualAddress.trim();
-                      if (isEvmAddress(m)) loadProfile(m);
-                      else setProfile({ error: 'Invalid address. Expected 0x...' });
-                    }}
-                  >
-                    Load
-                  </button>
-                </div>
-              ) : null}
-            </div>
-
-            {/* Reward cards */}
             <SectionTitle title="Onchain rewards" subtitle="Your Base app weekly reward stats" />
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -306,9 +309,7 @@ export default function ProfileDashboardClient() {
                 title={profile.reward_summary.previous_week_label || 'Previous week'}
                 value={`$${formatUSDC(profile.reward_summary.previous_week_usdc)}`}
                 subtitle={
-                  profile.reward_summary.pct_change == null
-                    ? 'Change: —'
-                    : `Change: ${profile.reward_summary.pct_change}%`
+                  profile.reward_summary.pct_change == null ? 'Change: —' : `Change: ${profile.reward_summary.pct_change}%`
                 }
               />
             </div>
@@ -343,9 +344,7 @@ export default function ProfileDashboardClient() {
                             background: '#FFFFFF',
                           }}
                         >
-                          <div style={{ fontSize: 12, fontWeight: 900, color: '#0000FF' }}>
-                            {w.week_label}
-                          </div>
+                          <div style={{ fontSize: 12, fontWeight: 900, color: '#0000FF' }}>{w.week_label}</div>
                           <div style={{ marginTop: 6, fontWeight: 900 }}>${formatUSDC(w.usdc)}</div>
                         </div>
                       ))}
@@ -363,7 +362,9 @@ export default function ProfileDashboardClient() {
               ) : social && 'error' in social ? (
                 <div className="card card-pad" style={{ border: '2px solid #0000FF' }}>
                   <div style={{ fontWeight: 900 }}>Social not available</div>
-                  <div className="subtle" style={{ marginTop: 6 }}>{social.error}</div>
+                  <div className="subtle" style={{ marginTop: 6 }}>
+                    {social.error}
+                  </div>
                 </div>
               ) : social && !('error' in social) ? (
                 <>
@@ -471,7 +472,9 @@ export default function ProfileDashboardClient() {
             <div className="subtle">Waiting for address…</div>
             {!addressToQuery ? (
               <div style={{ marginTop: 12 }}>
-                <button className="btn" onClick={() => setShowManual(true)}>Enter address</button>
+                <button className="btn" onClick={() => setShowManual(true)}>
+                  Enter address
+                </button>
               </div>
             ) : null}
           </div>
@@ -492,7 +495,9 @@ function MiniStat({ title, value }: { title: string; value: string }) {
         background: '#FFFFFF',
       }}
     >
-      <div className="subtle" style={{ marginBottom: 4 }}>{title}</div>
+      <div className="subtle" style={{ marginBottom: 4 }}>
+        {title}
+      </div>
       <div style={{ fontWeight: 900 }}>{value}</div>
     </div>
   );
@@ -508,14 +513,10 @@ function KpiCardDeep({ title, value, subtitle }: { title: string; value: string;
         border: '1px solid rgba(0,0,255,0.35)',
       }}
     >
-      <div style={{ fontSize: 12, opacity: 0.95, marginBottom: 6, color: '#FFFFFF', fontWeight: 900 }}>
-        {title}
-      </div>
+      <div style={{ fontSize: 12, opacity: 0.95, marginBottom: 6, color: '#FFFFFF', fontWeight: 900 }}>{title}</div>
       <div style={{ fontSize: 18, fontWeight: 900, color: '#FFFFFF' }}>{value}</div>
       {subtitle ? (
-        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.95, color: '#FFFFFF', fontWeight: 900 }}>
-          {subtitle}
-        </div>
+        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.95, color: '#FFFFFF', fontWeight: 900 }}>{subtitle}</div>
       ) : null}
     </div>
   );
@@ -525,7 +526,11 @@ function SectionTitle({ title, subtitle }: { title: string; subtitle?: string })
   return (
     <div style={{ marginTop: 6, marginBottom: 10 }}>
       <div style={{ fontSize: 14, fontWeight: 900, color: '#0000FF' }}>{title}</div>
-      {subtitle ? <div className="subtle" style={{ marginTop: 2 }}>{subtitle}</div> : null}
+      {subtitle ? (
+        <div className="subtle" style={{ marginTop: 2 }}>
+          {subtitle}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -546,7 +551,8 @@ function ShareCard(props: {
   };
 }) {
   const [imgDataUrl, setImgDataUrl] = useState<string | null>(null);
-  const shareText = `I just checked my Baseapp Weekly Reward Dashboard — feeling based.\nCheck yours: https://baseapp-reward-dashboard.vercel.app/`;
+  const shareText =
+    'I just checked my Baseapp Weekly Reward Dashboard — feeling based.\nCheck yours: https://baseapp-reward-dashboard.vercel.app/';
 
   async function generate() {
     const size = 1080;
@@ -588,8 +594,7 @@ function ShareCard(props: {
     // username
     ctx.fillStyle = '#6B7280';
     ctx.font = 'bold 28px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-    const u = props.username ? props.username : '';
-    ctx.fillText(u, 220, 195);
+    ctx.fillText(props.username ? props.username : '', 220, 195);
 
     // section title
     ctx.fillStyle = '#0000FF';
@@ -625,7 +630,9 @@ function ShareCard(props: {
   return (
     <div className="card card-pad">
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <button className="btn" onClick={generate}>Generate image</button>
+        <button className="btn" onClick={generate}>
+          Generate image
+        </button>
 
         <button
           className="btn"
