@@ -107,17 +107,6 @@ function pickFidFromMiniKitContext(ctx: unknown): number | null {
   return null;
 }
 
-function addDaysToYmd(ymd: string, days: number): string {
-  // ymd = "YYYY-MM-DD"
-  const ms = Date.parse(`${ymd}T00:00:00.000Z`);
-  if (!Number.isFinite(ms)) return ymd;
-  const next = ms + days * 24 * 60 * 60 * 1000;
-  const d = new Date(next);
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(d.getUTCDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
 
 export default function ProfileDashboardClient() {
   const { context } = useMiniKit();
@@ -198,19 +187,26 @@ export default function ProfileDashboardClient() {
   // IMPORTANT FIX:
   // Your social window should be [previous_week_start .. latest_week_start + 1 day)
   // Otherwise you often exclude the latest-day activity and get zeros.
-  useEffect(() => {
-    if (!fid) return;
-    if (!profile || 'error' in profile) return;
+  // Auto load social after profile is ready (latest reward week window = 7 days)
+useEffect(() => {
+  if (!fid) return;
+  if (!profile || 'error' in profile) return;
 
-    const latest = profile.reward_summary.latest_week_start_utc; // "YYYY-MM-DD"
-    const prev = profile.reward_summary.previous_week_start_utc;
+  const endDay = profile.reward_summary.latest_week_start_utc; // YYYY-MM-DD
+  if (!endDay) return;
 
-    // If previous is missing, fallback to latest-7days
-    const startYmd = prev || addDaysToYmd(latest, -7);
-    const endExclusiveYmd = addDaysToYmd(latest, 1);
+  // end = latest week start at 00:00Z
+  const endMs = Date.parse(`${endDay}T00:00:00.000Z`);
+  if (!Number.isFinite(endMs)) return;
 
-    loadSocial(fid, `${startYmd}T00:00:00.000Z`, `${endExclusiveYmd}T00:00:00.000Z`);
-  }, [fid, profile]);
+  // start = end - 7 days
+  const startMs = endMs - 7 * 24 * 60 * 60 * 1000;
+
+  const startIso = new Date(startMs).toISOString();
+  const endIso = new Date(endMs).toISOString();
+
+  loadSocial(fid, startIso, endIso);
+}, [fid, profile]);
 
   const finalAddress = useMemo(() => {
     if (profile && !('error' in profile)) return profile.address;

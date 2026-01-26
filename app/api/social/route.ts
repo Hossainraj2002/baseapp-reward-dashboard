@@ -17,9 +17,8 @@ function toString(v: unknown, fallback = ''): string {
   return typeof v === 'string' ? v : fallback;
 }
 
-function toIsoMs(dateOrMs: string | number): number {
-  if (typeof dateOrMs === 'number') return dateOrMs;
-  const ms = Date.parse(dateOrMs);
+function toIsoMs(dateOrIso: string): number {
+  const ms = Date.parse(dateOrIso);
   return Number.isFinite(ms) ? ms : 0;
 }
 
@@ -33,7 +32,12 @@ type SocialResponse = {
     following_count: number;
   };
   window: { start_utc: string; end_utc: string };
-  engagement: { casts: number; likes: number; recasts: number; replies: number };
+  engagement: {
+    casts: number;
+    likes: number;
+    recasts: number;
+    replies: number;
+  };
   top_posts: Array<{
     hash: string;
     text: string;
@@ -71,11 +75,12 @@ type NeynarBulkUser = {
   following_count?: number;
 };
 
-type NeynarBulkResponse = { users?: NeynarBulkUser[] };
+type NeynarBulkResponse = {
+  users?: NeynarBulkUser[];
+};
 
-function pickUserFromBulkResponse(json: NeynarBulkResponse | unknown) {
-  const obj = json as NeynarBulkResponse;
-  const u = Array.isArray(obj?.users) ? obj.users[0] : undefined;
+function pickUserFromBulkResponse(json: NeynarBulkResponse): SocialResponse['user'] | null {
+  const u = Array.isArray(json?.users) ? json.users[0] : undefined;
   if (!u) return null;
 
   return {
@@ -93,12 +98,20 @@ type NeynarUserCast = {
   hash?: string;
   text?: string;
   created_at?: string;
-  reactions?: { likes_count?: number; recasts_count?: number };
-  replies?: { count?: number };
+  reactions?: {
+    likes_count?: number;
+    recasts_count?: number;
+  };
+  replies?: {
+    count?: number;
+  };
   replies_count?: number;
 };
 
-type NeynarUserCastsResponse = { casts?: NeynarUserCast[]; next?: NeynarNext };
+type NeynarUserCastsResponse = {
+  casts?: NeynarUserCast[];
+  next?: NeynarNext;
+};
 
 function extractCastFields(c: NeynarUserCast) {
   const hash = toString(c.hash, '');
@@ -110,14 +123,24 @@ function extractCastFields(c: NeynarUserCast) {
   const replies = toNumber(c.replies?.count, toNumber(c.replies_count, 0));
 
   const url = hash ? `https://warpcast.com/~/cast/${encodeURIComponent(hash)}` : '';
+
   return { hash, text, created_at: createdAt, likes, recasts, replies, url };
 }
 
-async function fetchUserCasts(fid: number, maxPages = 6) {
+/**
+ * Fetch casts until:
+ * - we run out of cursor, OR
+ * - we have reached casts older than startMs (so we definitely covered the window), OR
+ * - safety page cap
+ */
+async function fetchUserCastsUntil(fid: number, startMs: number) {
   const casts: NeynarUserCast[] = [];
   let cursor: string | null = null;
 
-  for (let page = 0; page < maxPages; page++) {
+  // safety cap to avoid infinite loops
+  const MAX_PAGES = 20;
+
+  for (let page = 0; page < MAX_PAGES; page++) {
     const u = new URL(`${NEYNAR_BASE}/farcaster/feed/user/casts`);
     u.searchParams.set('fid', String(fid));
     u.searchParams.set('limit', '100');
@@ -127,9 +150,17 @@ async function fetchUserCasts(fid: number, maxPages = 6) {
     const items = Array.isArray(json.casts) ? json.casts : [];
     casts.push(...items);
 
+    // If we already have something older than startMs, we can stop early
+    const oldestMsInBatch = items
+      .map((c) => Date.parse(toString(c.created_at, '')))
+      .filter((ms) => Number.isFinite(ms))
+      .reduce((min, ms) => Math.min(min, ms), Number.POSITIVE_INFINITY);
+
     const nextCursor = typeof json.next?.cursor === 'string' ? json.next.cursor : null;
     cursor = nextCursor;
+
     if (!cursor) break;
+    if (Number.isFinite(oldestMsInBatch) && oldestMsInBatch < startMs) break;
   }
 
   return casts;
@@ -146,7 +177,6 @@ export async function GET(req: Request) {
     if (!Number.isFinite(fid) || fid <= 0) {
       return NextResponse.json({ error: 'Missing or invalid fid' }, { status: 400 });
     }
-
     if (!start || !end) {
       return NextResponse.json({ error: 'Missing start/end window' }, { status: 400 });
     }
@@ -166,8 +196,8 @@ export async function GET(req: Request) {
       pickUserFromBulkResponse(bulk) ??
       ({ username: null, display_name: null, pfp_url: null, follower_count: 0, following_count: 0 } as const);
 
-    // 2) Casts in window (we count engagement received on user casts)
-    const allCasts = await fetchUserCasts(fid);
+    // 2) Casts (paginate enough to reach the window)
+    const allCasts = await fetchUserCastsUntil(fid, startMs);
 
     const inWindow = allCasts.filter((c) => {
       const createdAt = toString(c.created_at, '');
