@@ -33,12 +33,7 @@ type SocialResponse = {
     following_count: number;
   };
   window: { start_utc: string; end_utc: string };
-  engagement: {
-    casts: number;
-    likes: number;
-    recasts: number;
-    replies: number;
-  };
+  engagement: { casts: number; likes: number; recasts: number; replies: number };
   top_posts: Array<{
     hash: string;
     text: string;
@@ -76,9 +71,7 @@ type NeynarBulkUser = {
   following_count?: number;
 };
 
-type NeynarBulkResponse = {
-  users?: NeynarBulkUser[];
-};
+type NeynarBulkResponse = { users?: NeynarBulkUser[] };
 
 function pickUserFromBulkResponse(json: NeynarBulkResponse | unknown) {
   const obj = json as NeynarBulkResponse;
@@ -100,20 +93,12 @@ type NeynarUserCast = {
   hash?: string;
   text?: string;
   created_at?: string;
-  reactions?: {
-    likes_count?: number;
-    recasts_count?: number;
-  };
-  replies?: {
-    count?: number;
-  };
+  reactions?: { likes_count?: number; recasts_count?: number };
+  replies?: { count?: number };
   replies_count?: number;
 };
 
-type NeynarUserCastsResponse = {
-  casts?: NeynarUserCast[];
-  next?: NeynarNext;
-};
+type NeynarUserCastsResponse = { casts?: NeynarUserCast[]; next?: NeynarNext };
 
 function extractCastFields(c: NeynarUserCast) {
   const hash = toString(c.hash, '');
@@ -124,9 +109,7 @@ function extractCastFields(c: NeynarUserCast) {
   const recasts = toNumber(c.reactions?.recasts_count, 0);
   const replies = toNumber(c.replies?.count, toNumber(c.replies_count, 0));
 
-  // In Base app, user may still open the cast via a standard Farcaster viewer URL.
   const url = hash ? `https://warpcast.com/~/cast/${encodeURIComponent(hash)}` : '';
-
   return { hash, text, created_at: createdAt, likes, recasts, replies, url };
 }
 
@@ -141,13 +124,11 @@ async function fetchUserCasts(fid: number, maxPages = 6) {
     if (cursor) u.searchParams.set('cursor', cursor);
 
     const json = await neynarFetch<NeynarUserCastsResponse>(u.toString());
-
     const items = Array.isArray(json.casts) ? json.casts : [];
     casts.push(...items);
 
     const nextCursor = typeof json.next?.cursor === 'string' ? json.next.cursor : null;
     cursor = nextCursor;
-
     if (!cursor) break;
   }
 
@@ -176,7 +157,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Invalid start/end window' }, { status: 400 });
     }
 
-    // 1) User profile
+    // 1) User
     const bulkUrl = new URL(`${NEYNAR_BASE}/farcaster/user/bulk`);
     bulkUrl.searchParams.set('fids', String(fid));
     const bulk = await neynarFetch<NeynarBulkResponse>(bulkUrl.toString());
@@ -185,8 +166,9 @@ export async function GET(req: Request) {
       pickUserFromBulkResponse(bulk) ??
       ({ username: null, display_name: null, pfp_url: null, follower_count: 0, following_count: 0 } as const);
 
-    // 2) Casts in time window
+    // 2) Casts in window (we count engagement received on user casts)
     const allCasts = await fetchUserCasts(fid);
+
     const inWindow = allCasts.filter((c) => {
       const createdAt = toString(c.created_at, '');
       const ms = Date.parse(createdAt);

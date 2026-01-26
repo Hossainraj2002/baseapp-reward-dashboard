@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMiniKit } from '@coinbase/onchainkit/minikit';
 import { useAccount } from 'wagmi';
+import { sdk } from '@farcaster/miniapp-sdk';
 import CopyButton from '@/components/CopyButton';
 
 const SUPPORT_CREATOR_ADDRESS = '0xd4a1D777e2882487d47c96bc23A47CeaB4f4f18A';
@@ -56,6 +57,10 @@ type SocialApiResponse =
     }
   | { error: string };
 
+type WebShareNavigator = Navigator & {
+  share?: (data: { text?: string; url?: string; files?: File[]; title?: string }) => Promise<void>;
+};
+
 function isEvmAddress(s: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(s);
 }
@@ -81,17 +86,60 @@ function pickAddressFromMiniKitContext(ctx: unknown): string | null {
 }
 
 function pickFidFromMiniKitContext(ctx: unknown): number | null {
-  const c = ctx as { user?: { fid?: string | number } };
-  const raw = c?.user?.fid;
-  const n = raw == null ? NaN : Number(raw);
-  return Number.isFinite(n) ? n : null;
+  if (!ctx) return null;
+
+  const c = ctx as Record<string, unknown>;
+
+  const possibleFids: Array<unknown> = [
+    (c.user as Record<string, unknown> | undefined)?.fid,
+    c.fid,
+    (c.client as Record<string, unknown> | undefined)?.fid,
+    ((c.frame as Record<string, unknown> | undefined)?.user as Record<string, unknown> | undefined)?.fid,
+  ];
+
+  for (const raw of possibleFids) {
+    if (raw != null) {
+      const n = Number(raw);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+
+  return null;
+}
+
+function addDaysToYmd(ymd: string, days: number): string {
+  // ymd = "YYYY-MM-DD"
+  const ms = Date.parse(`${ymd}T00:00:00.000Z`);
+  if (!Number.isFinite(ms)) return ymd;
+  const next = ms + days * 24 * 60 * 60 * 1000;
+  const d = new Date(next);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 export default function ProfileDashboardClient() {
   const { context } = useMiniKit();
   const { address: wagmiAddress, isConnected } = useAccount();
 
-  const fid = useMemo(() => pickFidFromMiniKitContext(context), [context]);
+  // SDK context (more reliable in miniapps)
+  const [sdkFid, setSdkFid] = useState<number | null>(null);
+
+  useEffect(() => {
+    sdk.context
+      .then((ctx) => {
+        const v = ctx?.user?.fid;
+        if (typeof v === 'number' && v > 0) setSdkFid(v);
+      })
+      .catch(() => {
+        // ignore
+      });
+  }, []);
+
+  const minikitFid = useMemo(() => pickFidFromMiniKitContext(context), [context]);
+  const fid = sdkFid ?? minikitFid;
+
   const addressFromContext = useMemo(() => pickAddressFromMiniKitContext(context), [context]);
 
   const addressToQuery = useMemo(() => {
@@ -147,17 +195,21 @@ export default function ProfileDashboardClient() {
     if (addressToQuery) loadProfile(addressToQuery);
   }, [addressToQuery]);
 
-  // Auto load social after profile is ready (need reward window)
+  // IMPORTANT FIX:
+  // Your social window should be [previous_week_start .. latest_week_start + 1 day)
+  // Otherwise you often exclude the latest-day activity and get zeros.
   useEffect(() => {
     if (!fid) return;
     if (!profile || 'error' in profile) return;
 
-    const end = profile.reward_summary.latest_week_start_utc;
-    const start = profile.reward_summary.previous_week_start_utc;
+    const latest = profile.reward_summary.latest_week_start_utc; // "YYYY-MM-DD"
+    const prev = profile.reward_summary.previous_week_start_utc;
 
-    if (!start || !end) return;
+    // If previous is missing, fallback to latest-7days
+    const startYmd = prev || addDaysToYmd(latest, -7);
+    const endExclusiveYmd = addDaysToYmd(latest, 1);
 
-    loadSocial(fid, `${start}T00:00:00.000Z`, `${end}T00:00:00.000Z`);
+    loadSocial(fid, `${startYmd}T00:00:00.000Z`, `${endExclusiveYmd}T00:00:00.000Z`);
   }, [fid, profile]);
 
   const finalAddress = useMemo(() => {
@@ -272,7 +324,7 @@ export default function ProfileDashboardClient() {
             <MiniStat title="Following" value={social.user.following_count.toLocaleString()} />
           </div>
         ) : (
-          <div className="subtle">Social data not available{fid ? '' : ' (FID not detected)' }.</div>
+          <div className="subtle">Social data not available{fid ? '' : ' (FID not detected)'}.</div>
         )}
       </div>
 
@@ -309,9 +361,7 @@ export default function ProfileDashboardClient() {
                 title={profile.reward_summary.previous_week_label || 'Previous week'}
                 value={`$${formatUSDC(profile.reward_summary.previous_week_usdc)}`}
                 subtitle={
-                  profile.reward_summary.pct_change == null
-                    ? 'Change: —'
-                    : `Change: ${profile.reward_summary.pct_change}%`
+                  profile.reward_summary.pct_change == null ? 'Change: —' : `Change: ${profile.reward_summary.pct_change}%`
                 }
               />
             </div>
@@ -553,14 +603,38 @@ function ShareCard(props: {
   const [imgDataUrl, setImgDataUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const appLink = 'https://base.app/app/baseapp-reward-dashboard.vercel.app';
+  const miniAppLink = 'https://base.app/app/baseapp-reward-dashboard.vercel.app';
+
+  // This is the IMPORTANT change:
+  // We share a URL that has OG meta tags -> X/Base can preview image reliably.
+  const sharePageUrl = useMemo(() => {
+    const origin =
+      typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://baseapp-reward-dashboard.vercel.app';
+
+    const qs = new URLSearchParams({
+      name: props.displayName || 'Profile',
+      username: props.username || '',
+      pfp: props.pfpUrl || '',
+      allTime: String(props.onchain.allTime),
+      weeks: String(props.onchain.weeks),
+      latestLabel: props.onchain.latestLabel,
+      latestUsdc: String(props.onchain.latestUsdc),
+      casts: String(props.onchain.casts),
+      likes: String(props.onchain.likes),
+      recasts: String(props.onchain.recasts),
+      replies: String(props.onchain.replies),
+    });
+
+    return `${origin}/share?${qs.toString()}`;
+  }, [props.displayName, props.username, props.pfpUrl, props.onchain]);
 
   const shareText =
     `I just checked my Base App Reward Dashboard — feeling based.\n` +
     `Rewards + engagement (latest week).\n` +
-    `Check yours: ${appLink}`;
+    `Open the app: ${miniAppLink}\n` +
+    `My card: ${sharePageUrl}`;
 
-  async function generate(): Promise<string | null> {
+  async function generateCanvasCard(): Promise<string | null> {
     setBusy(true);
     try {
       const size = 1080;
@@ -619,8 +693,7 @@ function ShareCard(props: {
 
       ctx.fillStyle = 'rgba(255,255,255,0.9)';
       ctx.font = '800 28px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-      const uname = props.username ? props.username : '';
-      ctx.fillText(trimText(ctx, uname, 520), 280, 220);
+      ctx.fillText(trimText(ctx, props.username || '', 520), 280, 220);
 
       // Title
       ctx.fillStyle = '#111827';
@@ -661,14 +734,14 @@ function ShareCard(props: {
         ctx.fillText(trimText(ctx, boxes[i].v, 360), bx + 22, by + 84);
       }
 
-      // Footer link
+      // Footer
       ctx.fillStyle = '#111827';
       ctx.font = '900 22px system-ui, -apple-system, Segoe UI, Roboto, Arial';
       ctx.fillText('Check yours on Base:', 120, 1000);
 
       ctx.fillStyle = '#0000FF';
       ctx.font = '900 22px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-      ctx.fillText(trimText(ctx, appLink, 780), 320, 1000);
+      ctx.fillText(trimText(ctx, miniAppLink, 780), 320, 1000);
 
       const dataUrl = canvas.toDataURL('image/png');
       setImgDataUrl(dataUrl);
@@ -694,50 +767,47 @@ function ShareCard(props: {
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
 
-  // Typed Web Share API (no `any`)
-  type WebShareNavigator = Navigator & {
-    share?: (data: { text?: string; url?: string; files?: File[]; title?: string }) => Promise<void>;
-  };
-
-  async function shareNative() {
+  async function shareNativeLink() {
     const nav = navigator as WebShareNavigator;
     const canShare = typeof nav.share === 'function';
 
-    const dataUrl = imgDataUrl || (await generate());
-    if (!dataUrl) {
-      try {
-        await navigator.clipboard.writeText(shareText);
-      } catch { /* ignore */ }
-      return;
-    }
-
-    // If Web Share API is not available inside Base app, fallback: copy text
+    // Share link + text (reliable in Base app; no image file sharing needed)
     if (!canShare) {
       try {
         await navigator.clipboard.writeText(shareText);
-      } catch { /* ignore */ }
+      } catch {
+        // ignore
+      }
       return;
     }
 
     try {
-      const blob = dataUrlToBlob(dataUrl);
-      const file = new File([blob], 'baseapp-reward-card.png', { type: 'image/png' });
-
       await nav.share({
         text: shareText,
-        files: [file],
+        url: sharePageUrl,
+        title: 'Base Reward Card',
       });
     } catch {
       try {
         await navigator.clipboard.writeText(shareText);
-      } catch { /* ignore */ }
+      } catch {
+        // ignore
+      }
     }
+  }
+
+  function openXIntent() {
+    const intent = new URL('https://x.com/intent/tweet');
+    intent.searchParams.set('text', shareText);
+    // X prefers URL separately too:
+    intent.searchParams.set('url', sharePageUrl);
+    window.open(intent.toString(), '_blank', 'noopener,noreferrer');
   }
 
   return (
     <div className="card card-pad">
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <button className="btn" disabled={busy} onClick={() => void generate()}>
+        <button className="btn" disabled={busy} onClick={() => void generateCanvasCard()}>
           {busy ? 'Generating…' : 'Generate card'}
         </button>
 
@@ -746,14 +816,20 @@ function ShareCard(props: {
           onClick={async () => {
             try {
               await navigator.clipboard.writeText(shareText);
-            } catch { /* ignore */ }
+            } catch {
+              // ignore
+            }
           }}
         >
           Copy share text
         </button>
 
-        <button className="btn" disabled={busy} onClick={() => void shareNative()}>
+        <button className="btn" onClick={() => void shareNativeLink()}>
           Share
+        </button>
+
+        <button className="btn" onClick={() => openXIntent()}>
+          Post to X
         </button>
 
         {imgDataUrl ? (
@@ -763,19 +839,16 @@ function ShareCard(props: {
         ) : null}
       </div>
 
+      <div className="subtle" style={{ marginTop: 10 }}>
+        Sharing uses a link preview (works best on X/Base). Download is for manual posting.
+      </div>
+
       {imgDataUrl ? (
         <div style={{ marginTop: 12 }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={imgDataUrl} alt="share card" style={{ width: '100%', borderRadius: 14 }} />
-          <div className="subtle" style={{ marginTop: 10 }}>
-            Tip: Use “Share” inside Base app. If it fails, download the image and post it manually with the copied text.
-          </div>
         </div>
-      ) : (
-        <div className="subtle" style={{ marginTop: 10 }}>
-          Generate a “card” image, then share or download it.
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }
