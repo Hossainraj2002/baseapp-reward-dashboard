@@ -95,6 +95,7 @@ function pickUserFromBulkResponse(json: NeynarBulkResponse | unknown) {
 }
 
 type NeynarNext = { cursor?: string };
+
 type NeynarUserCast = {
   hash?: string;
   text?: string;
@@ -123,6 +124,7 @@ function extractCastFields(c: NeynarUserCast) {
   const recasts = toNumber(c.reactions?.recasts_count, 0);
   const replies = toNumber(c.replies?.count, toNumber(c.replies_count, 0));
 
+  // In Base app, user may still open the cast via a standard Farcaster viewer URL.
   const url = hash ? `https://warpcast.com/~/cast/${encodeURIComponent(hash)}` : '';
 
   return { hash, text, created_at: createdAt, likes, recasts, replies, url };
@@ -174,7 +176,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Invalid start/end window' }, { status: 400 });
     }
 
-    // 1) User
+    // 1) User profile
     const bulkUrl = new URL(`${NEYNAR_BASE}/farcaster/user/bulk`);
     bulkUrl.searchParams.set('fids', String(fid));
     const bulk = await neynarFetch<NeynarBulkResponse>(bulkUrl.toString());
@@ -183,7 +185,7 @@ export async function GET(req: Request) {
       pickUserFromBulkResponse(bulk) ??
       ({ username: null, display_name: null, pfp_url: null, follower_count: 0, following_count: 0 } as const);
 
-    // 2) Casts in window
+    // 2) Casts in time window
     const allCasts = await fetchUserCasts(fid);
     const inWindow = allCasts.filter((c) => {
       const createdAt = toString(c.created_at, '');

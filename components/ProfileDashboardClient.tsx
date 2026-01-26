@@ -147,7 +147,7 @@ export default function ProfileDashboardClient() {
     if (addressToQuery) loadProfile(addressToQuery);
   }, [addressToQuery]);
 
-  // Auto load social after profile is ready (need latest reward window)
+  // Auto load social after profile is ready (need reward window)
   useEffect(() => {
     if (!fid) return;
     if (!profile || 'error' in profile) return;
@@ -169,8 +169,10 @@ export default function ProfileDashboardClient() {
 
   const headerName =
     social && !('error' in social) ? social.user.display_name || social.user.username || 'Profile' : 'Profile';
+
   const headerUsername =
     social && !('error' in social) ? (social.user.username ? `@${social.user.username}` : null) : null;
+
   const headerPfp = social && !('error' in social) ? social.user.pfp_url : null;
 
   const showChangeAddressButton =
@@ -178,7 +180,7 @@ export default function ProfileDashboardClient() {
 
   return (
     <div className="page" style={{ paddingBottom: 28 }}>
-      {/* Header (NO Find button here anymore) */}
+      {/* Header (NO Find button) */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div
@@ -213,7 +215,7 @@ export default function ProfileDashboardClient() {
         ) : null}
       </div>
 
-      {/* Collapsed wallet/address panel (only when user taps "Change address") */}
+      {/* Collapsed wallet/address panel */}
       {showManual ? (
         <div className="card card-pad" style={{ marginTop: 12, border: '2px solid #0000FF' }}>
           <div style={{ fontWeight: 900, marginBottom: 8 }}>Wallet address</div>
@@ -270,7 +272,7 @@ export default function ProfileDashboardClient() {
             <MiniStat title="Following" value={social.user.following_count.toLocaleString()} />
           </div>
         ) : (
-          <div className="subtle">Social data not available{fid ? '' : ' (FID not detected)'}.</div>
+          <div className="subtle">Social data not available{fid ? '' : ' (FID not detected)' }.</div>
         )}
       </div>
 
@@ -281,9 +283,7 @@ export default function ProfileDashboardClient() {
         ) : profile && 'error' in profile ? (
           <div className="card card-pad" style={{ border: '2px solid #0000FF' }}>
             <div style={{ fontWeight: 900 }}>Failed to load profile</div>
-            <div className="subtle" style={{ marginTop: 6 }}>
-              {profile.error}
-            </div>
+            <div className="subtle" style={{ marginTop: 6 }}>{profile.error}</div>
 
             {!addressToQuery ? (
               <div style={{ marginTop: 12 }}>
@@ -309,7 +309,9 @@ export default function ProfileDashboardClient() {
                 title={profile.reward_summary.previous_week_label || 'Previous week'}
                 value={`$${formatUSDC(profile.reward_summary.previous_week_usdc)}`}
                 subtitle={
-                  profile.reward_summary.pct_change == null ? 'Change: —' : `Change: ${profile.reward_summary.pct_change}%`
+                  profile.reward_summary.pct_change == null
+                    ? 'Change: —'
+                    : `Change: ${profile.reward_summary.pct_change}%`
                 }
               />
             </div>
@@ -362,9 +364,7 @@ export default function ProfileDashboardClient() {
               ) : social && 'error' in social ? (
                 <div className="card card-pad" style={{ border: '2px solid #0000FF' }}>
                   <div style={{ fontWeight: 900 }}>Social not available</div>
-                  <div className="subtle" style={{ marginTop: 6 }}>
-                    {social.error}
-                  </div>
+                  <div className="subtle" style={{ marginTop: 6 }}>{social.error}</div>
                 </div>
               ) : social && !('error' in social) ? (
                 <>
@@ -398,7 +398,7 @@ export default function ProfileDashboardClient() {
                             {p.url ? (
                               <div style={{ marginTop: 10 }}>
                                 <a className="btn" href={p.url} target="_blank" rel="noreferrer">
-                                  Open on Warpcast
+                                  Open post
                                 </a>
                               </div>
                             ) : null}
@@ -410,7 +410,7 @@ export default function ProfileDashboardClient() {
 
                   {/* Share section */}
                   <div style={{ marginTop: 14 }}>
-                    <SectionTitle title="Share your stats" subtitle="Generate a shareable image (download + copy text)" />
+                    <SectionTitle title="Share your stats" subtitle="Generate a shareable card + copy text" />
                     <ShareCard
                       pfpUrl={headerPfp || null}
                       displayName={headerName}
@@ -551,87 +551,194 @@ function ShareCard(props: {
   };
 }) {
   const [imgDataUrl, setImgDataUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const appLink = 'https://base.app/app/baseapp-reward-dashboard.vercel.app';
+
   const shareText =
-    'I just checked my Baseapp Weekly Reward Dashboard — feeling based.\nCheck yours: https://baseapp-reward-dashboard.vercel.app/';
+    `I just checked my Base App Reward Dashboard — feeling based.\n` +
+    `Rewards + engagement (latest week).\n` +
+    `Check yours: ${appLink}`;
 
-  async function generate() {
-    const size = 1080;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+  async function generate(): Promise<string | null> {
+    setBusy(true);
+    try {
+      const size = 1080;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
 
-    // background
-    ctx.fillStyle = '#0000FF';
-    ctx.fillRect(0, 0, size, size);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
 
-    // card
-    ctx.fillStyle = '#FFFFFF';
-    roundRect(ctx, 60, 70, 960, 940, 44);
-    ctx.fill();
+      // Background gradient
+      const bg = ctx.createLinearGradient(0, 0, size, size);
+      bg.addColorStop(0, '#0000FF');
+      bg.addColorStop(1, '#6D28D9');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, size, size);
 
-    // pfp
-    if (props.pfpUrl) {
-      try {
-        const img = await loadImage(props.pfpUrl);
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(140, 160, 56, 0, Math.PI * 2);
-        ctx.clip();
-        ctx.drawImage(img, 84, 104, 112, 112);
-        ctx.restore();
-      } catch {
-        // ignore image failures
+      // Outer frame
+      ctx.fillStyle = 'rgba(255,255,255,0.18)';
+      roundRect(ctx, 50, 50, 980, 980, 64);
+      ctx.fill();
+
+      // Inner card
+      ctx.fillStyle = '#FFFFFF';
+      roundRect(ctx, 85, 85, 910, 910, 56);
+      ctx.fill();
+
+      // Decorative top bar
+      const bar = ctx.createLinearGradient(85, 85, 995, 220);
+      bar.addColorStop(0, '#0000FF');
+      bar.addColorStop(1, '#3B82F6');
+      ctx.fillStyle = bar;
+      roundRect(ctx, 105, 105, 870, 170, 44);
+      ctx.fill();
+
+      // PFP circle
+      if (props.pfpUrl) {
+        try {
+          const img = await loadImage(props.pfpUrl);
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(190, 190, 62, 0, Math.PI * 2);
+          ctx.closePath();
+          ctx.clip();
+          ctx.drawImage(img, 128, 128, 124, 124);
+          ctx.restore();
+        } catch {
+          // ignore
+        }
       }
+
+      // Name + username
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = '900 44px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+      ctx.fillText(trimText(ctx, props.displayName || 'Profile', 600), 280, 175);
+
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.font = '800 28px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+      const uname = props.username ? props.username : '';
+      ctx.fillText(trimText(ctx, uname, 520), 280, 220);
+
+      // Title
+      ctx.fillStyle = '#111827';
+      ctx.font = '900 34px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+      ctx.fillText('Rewards + Social (Latest Week)', 120, 340);
+
+      // Stat boxes
+      const boxes = [
+        { k: 'All-time rewards', v: `$${formatUSDC(props.onchain.allTime)}` },
+        { k: 'Earning weeks', v: `${props.onchain.weeks}` },
+        { k: props.onchain.latestLabel, v: `$${formatUSDC(props.onchain.latestUsdc)}` },
+        { k: 'Casts', v: `${props.onchain.casts}` },
+        { k: 'Likes', v: `${props.onchain.likes}` },
+        { k: 'Recasts', v: `${props.onchain.recasts}` },
+        { k: 'Replies', v: `${props.onchain.replies}` },
+      ];
+
+      for (let i = 0; i < boxes.length; i++) {
+        const col = i % 2;
+        const row = Math.floor(i / 2);
+
+        const bx = 120 + col * 450;
+        const by = 395 + row * 140;
+
+        const g = ctx.createLinearGradient(bx, by, bx + 410, by + 110);
+        g.addColorStop(0, '#0B1020');
+        g.addColorStop(1, '#1D4ED8');
+        ctx.fillStyle = g;
+        roundRect(ctx, bx, by, 410, 110, 26);
+        ctx.fill();
+
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.font = '900 20px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+        ctx.fillText(trimText(ctx, boxes[i].k, 360), bx + 22, by + 40);
+
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '900 38px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+        ctx.fillText(trimText(ctx, boxes[i].v, 360), bx + 22, by + 84);
+      }
+
+      // Footer link
+      ctx.fillStyle = '#111827';
+      ctx.font = '900 22px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+      ctx.fillText('Check yours on Base:', 120, 1000);
+
+      ctx.fillStyle = '#0000FF';
+      ctx.font = '900 22px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+      ctx.fillText(trimText(ctx, appLink, 780), 320, 1000);
+
+      const dataUrl = canvas.toDataURL('image/png');
+      setImgDataUrl(dataUrl);
+      return dataUrl;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function downloadImage() {
+    if (!imgDataUrl) return;
+    const blob = dataUrlToBlob(imgDataUrl);
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.rel = 'noreferrer';
+    a.download = 'baseapp-reward-card.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  // Typed Web Share API (no `any`)
+  type WebShareNavigator = Navigator & {
+    share?: (data: { text?: string; url?: string; files?: File[]; title?: string }) => Promise<void>;
+  };
+
+  async function shareNative() {
+    const nav = navigator as WebShareNavigator;
+    const canShare = typeof nav.share === 'function';
+
+    const dataUrl = imgDataUrl || (await generate());
+    if (!dataUrl) {
+      try {
+        await navigator.clipboard.writeText(shareText);
+      } catch { /* ignore */ }
+      return;
     }
 
-    // name
-    ctx.fillStyle = '#0A0A0A';
-    ctx.font = 'bold 44px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-    ctx.fillText(props.displayName.slice(0, 28), 220, 150);
-
-    // username
-    ctx.fillStyle = '#6B7280';
-    ctx.font = 'bold 28px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-    ctx.fillText(props.username ? props.username : '', 220, 195);
-
-    // section title
-    ctx.fillStyle = '#0000FF';
-    ctx.font = 'bold 34px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-    ctx.fillText('Rewards + Social (Latest Week)', 90, 300);
-
-    // stats blocks
-    ctx.fillStyle = '#0A0A0A';
-    ctx.font = 'bold 30px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-
-    const lines = [
-      `All-time rewards: $${formatUSDC(props.onchain.allTime)}`,
-      `Earning weeks: ${props.onchain.weeks}`,
-      `${props.onchain.latestLabel}: $${formatUSDC(props.onchain.latestUsdc)}`,
-      `Casts: ${props.onchain.casts}  Likes: ${props.onchain.likes}`,
-      `Recasts: ${props.onchain.recasts}  Replies: ${props.onchain.replies}`,
-    ];
-
-    let y = 380;
-    for (const line of lines) {
-      ctx.fillText(line, 90, y);
-      y += 60;
+    // If Web Share API is not available inside Base app, fallback: copy text
+    if (!canShare) {
+      try {
+        await navigator.clipboard.writeText(shareText);
+      } catch { /* ignore */ }
+      return;
     }
 
-    // footer
-    ctx.fillStyle = '#6B7280';
-    ctx.font = 'bold 24px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-    ctx.fillText('baseapp-reward-dashboard.vercel.app', 90, 980);
+    try {
+      const blob = dataUrlToBlob(dataUrl);
+      const file = new File([blob], 'baseapp-reward-card.png', { type: 'image/png' });
 
-    setImgDataUrl(canvas.toDataURL('image/png'));
+      await nav.share({
+        text: shareText,
+        files: [file],
+      });
+    } catch {
+      try {
+        await navigator.clipboard.writeText(shareText);
+      } catch { /* ignore */ }
+    }
   }
 
   return (
     <div className="card card-pad">
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <button className="btn" onClick={generate}>
-          Generate image
+        <button className="btn" disabled={busy} onClick={() => void generate()}>
+          {busy ? 'Generating…' : 'Generate card'}
         </button>
 
         <button
@@ -639,18 +746,20 @@ function ShareCard(props: {
           onClick={async () => {
             try {
               await navigator.clipboard.writeText(shareText);
-            } catch {
-              // ignore
-            }
+            } catch { /* ignore */ }
           }}
         >
           Copy share text
         </button>
 
+        <button className="btn" disabled={busy} onClick={() => void shareNative()}>
+          Share
+        </button>
+
         {imgDataUrl ? (
-          <a className="btn" href={imgDataUrl} download="baseapp-reward-stats.png">
+          <button className="btn" onClick={() => void downloadImage()}>
             Download image
-          </a>
+          </button>
         ) : null}
       </div>
 
@@ -658,10 +767,13 @@ function ShareCard(props: {
         <div style={{ marginTop: 12 }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={imgDataUrl} alt="share card" style={{ width: '100%', borderRadius: 14 }} />
+          <div className="subtle" style={{ marginTop: 10 }}>
+            Tip: Use “Share” inside Base app. If it fails, download the image and post it manually with the copied text.
+          </div>
         </div>
       ) : (
         <div className="subtle" style={{ marginTop: 10 }}>
-          Generate an image, then download it and share with the copied text.
+          Generate a “card” image, then share or download it.
         </div>
       )}
     </div>
@@ -687,4 +799,23 @@ function loadImage(src: string): Promise<HTMLImageElement> {
     img.onerror = reject;
     img.src = src;
   });
+}
+
+function dataUrlToBlob(dataUrl: string) {
+  const parts = dataUrl.split(',');
+  const mime = parts[0]?.match(/:(.*?);/)?.[1] || 'image/png';
+  const binStr = atob(parts[1] || '');
+  const len = binStr.length;
+  const arr = new Uint8Array(len);
+  for (let i = 0; i < len; i++) arr[i] = binStr.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+function trimText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  let t = text || '';
+  if (ctx.measureText(t).width <= maxWidth) return t;
+  while (t.length > 0 && ctx.measureText(t + '…').width > maxWidth) {
+    t = t.slice(0, -1);
+  }
+  return t + '…';
 }
