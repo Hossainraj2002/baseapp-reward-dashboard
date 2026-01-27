@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 const NEYNAR_BASE = 'https://api.neynar.com/v2';
+const NEYNAR_LIMIT = 50; // ✅ Neynar v2 requires 1..50
 
 function requireApiKey(): string {
   const k = process.env.NEYNAR_API_KEY;
@@ -119,18 +120,17 @@ function extractCastFields(c: NeynarUserCast) {
   const replies = toNumber(c.replies?.count, toNumber(c.replies_count, 0));
 
   const url = hash ? `https://warpcast.com/~/cast/${encodeURIComponent(hash)}` : '';
-
   return { hash, text, created_at: createdAt, likes, recasts, replies, url };
 }
 
-async function fetchAllUserCasts(fid: number, maxPages = 6) {
+async function fetchAllUserCasts(fid: number, maxPages = 10) {
   const casts: NeynarUserCast[] = [];
   let cursor: string | null = null;
 
   for (let page = 0; page < maxPages; page++) {
     const u = new URL(`${NEYNAR_BASE}/farcaster/feed/user/casts`);
     u.searchParams.set('fid', String(fid));
-    u.searchParams.set('limit', '100');
+    u.searchParams.set('limit', String(NEYNAR_LIMIT)); // ✅ 50 max
     if (cursor) u.searchParams.set('cursor', cursor);
 
     const json = await neynarFetch<NeynarUserCastsResponse>(u.toString());
@@ -146,29 +146,29 @@ async function fetchAllUserCasts(fid: number, maxPages = 6) {
 }
 
 /**
- * This endpoint returns BOTH replies and recasts by the user.
- * We keep this generic because Neynar sometimes changes response shapes.
+ * Replies + Recasts by the user.
+ * Response shape can differ; we parse safely.
  */
-async function fetchRepliesAndRecasts(fid: number, maxPages = 6): Promise<Array<Record<string, unknown>>> {
+async function fetchRepliesAndRecasts(fid: number, maxPages = 10): Promise<Array<Record<string, unknown>>> {
   const out: Array<Record<string, unknown>> = [];
   let cursor: string | null = null;
 
   for (let page = 0; page < maxPages; page++) {
     const u = new URL(`${NEYNAR_BASE}/farcaster/feed/user/replies_and_recasts`);
     u.searchParams.set('fid', String(fid));
-    u.searchParams.set('limit', '100');
+    u.searchParams.set('limit', String(NEYNAR_LIMIT)); // ✅ 50 max
     if (cursor) u.searchParams.set('cursor', cursor);
 
     const json = await neynarFetch<unknown>(u.toString());
 
     let items: unknown[] = [];
     if (isRecord(json)) {
-      const maybe = json['casts'];
-      if (Array.isArray(maybe)) items = maybe;
-      const maybe2 = json['items'];
-      if (!items.length && Array.isArray(maybe2)) items = maybe2;
-      const maybe3 = json['result'];
-      if (!items.length && Array.isArray(maybe3)) items = maybe3;
+      const maybeCasts = json['casts'];
+      if (Array.isArray(maybeCasts)) items = maybeCasts;
+      const maybeItems = json['items'];
+      if (!items.length && Array.isArray(maybeItems)) items = maybeItems;
+      const maybeResult = json['result'];
+      if (!items.length && Array.isArray(maybeResult)) items = maybeResult;
     }
 
     for (const it of items) {
@@ -187,18 +187,16 @@ async function fetchRepliesAndRecasts(fid: number, maxPages = 6): Promise<Array<
 }
 
 /**
- * Fetch likes made by the user (outgoing).
- * Uses generic parsing to avoid breaking on minor shape changes.
+ * Likes made by the user (outgoing).
  */
-async function fetchUserLikes(fid: number, maxPages = 6): Promise<Array<Record<string, unknown>>> {
+async function fetchUserLikes(fid: number, maxPages = 10): Promise<Array<Record<string, unknown>>> {
   const out: Array<Record<string, unknown>> = [];
   let cursor: string | null = null;
 
   for (let page = 0; page < maxPages; page++) {
     const u = new URL(`${NEYNAR_BASE}/farcaster/reactions/user`);
     u.searchParams.set('fid', String(fid));
-    u.searchParams.set('limit', '100');
-    // Many deployments support reaction_type=like. If unsupported, Neynar will ignore or error.
+    u.searchParams.set('limit', String(NEYNAR_LIMIT)); // ✅ 50 max
     u.searchParams.set('reaction_type', 'like');
     if (cursor) u.searchParams.set('cursor', cursor);
 
@@ -228,7 +226,6 @@ async function fetchUserLikes(fid: number, maxPages = 6): Promise<Array<Record<s
 }
 
 function extractCreatedAtMs(obj: Record<string, unknown>): number {
-  // Try common paths where Neynar stores timestamps
   const direct = obj['created_at'];
   if (typeof direct === 'string') return toIsoMs(direct);
 
@@ -258,11 +255,9 @@ function classifyReplyOrRecast(obj: Record<string, unknown>): 'reply' | 'recast'
     if (s.includes('recast')) return 'recast';
   }
 
-  // Sometimes Neynar uses "reaction_type" for recasts
   const rt = obj['reaction_type'];
   if (typeof rt === 'string' && rt.toLowerCase().includes('recast')) return 'recast';
 
-  // Sometimes recasts are a "recasted_cast" object, and replies have "parent_hash"
   if (isRecord(obj['recasted_cast'])) return 'recast';
   if (typeof obj['parent_hash'] === 'string') return 'reply';
 
@@ -280,7 +275,6 @@ export async function GET(req: Request) {
     if (!Number.isFinite(fid) || fid <= 0) {
       return NextResponse.json({ error: 'Missing or invalid fid' }, { status: 400 });
     }
-
     if (!start || !end) {
       return NextResponse.json({ error: 'Missing start/end window' }, { status: 400 });
     }
@@ -300,21 +294,20 @@ export async function GET(req: Request) {
       pickUserFromBulkResponse(bulk) ??
       ({ username: null, display_name: null, pfp_url: null, follower_count: 0, following_count: 0 } as const);
 
-    // 2) Casts (for “casts count” + top posts ranking)
+    // 2) Casts for casts count + top posts
     const allCasts = await fetchAllUserCasts(fid);
     const castsInWindow = allCasts.filter((c) => {
       const ms = Date.parse(toString(c.created_at, ''));
       return Number.isFinite(ms) && ms >= startMs && ms < endMs;
     });
 
-    // Top posts = top casts by received engagement
     const extractedCasts = castsInWindow.map(extractCastFields);
     const top_posts = extractedCasts
       .slice()
       .sort((a, b) => b.likes + b.recasts + b.replies - (a.likes + a.recasts + a.replies))
       .slice(0, 7);
 
-    // 3) Replies + Recasts (OUTGOING)
+    // 3) Replies + Recasts (outgoing)
     const rr = await fetchRepliesAndRecasts(fid);
     let replies = 0;
     let recasts = 0;
@@ -328,7 +321,7 @@ export async function GET(req: Request) {
       else if (kind === 'recast') recasts += 1;
     }
 
-    // 4) Likes (OUTGOING)
+    // 4) Likes (outgoing)
     const likesItems = await fetchUserLikes(fid);
     let likes = 0;
     for (const item of likesItems) {
@@ -350,7 +343,9 @@ export async function GET(req: Request) {
       top_posts,
     };
 
-    return NextResponse.json(out, { headers: { 'cache-control': 'no-store, max-age=0' } });
+    return NextResponse.json(out, {
+      headers: { 'cache-control': 'no-store, max-age=0' },
+    });
   } catch (e) {
     return NextResponse.json(
       { error: (e as Error)?.message || 'Failed to fetch social data' },
