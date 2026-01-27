@@ -1,239 +1,201 @@
-import { NextResponse } from 'next/server';
+// app/api/social/route.ts - WITH DAILY TOP POSTS
+import { NextRequest, NextResponse } from 'next/server';
 
+const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY || '';
 const NEYNAR_BASE = 'https://api.neynar.com/v2';
 
-// Neynar requires limit between 1 and 50
-const NEYNAR_LIMIT = 50;
-
-function requireApiKey(): string {
-  const k = process.env.NEYNAR_API_KEY;
-  if (!k) throw new Error('Missing NEYNAR_API_KEY');
-  return k;
+function toString(v: unknown, fallback: string): string {
+  if (typeof v === 'string') return v;
+  return fallback;
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null;
-}
-
-function toNumber(v: unknown, fallback = 0): number {
-  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+function toNumber(v: unknown, fallback: number): number {
+  const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
 
-function toString(v: unknown, fallback = ''): string {
-  return typeof v === 'string' ? v : fallback;
+// Get YYYY-MM-DD from timestamp
+function getDateKey(timestamp: string): string {
+  const d = new Date(timestamp);
+  return d.toISOString().split('T')[0]; // "2026-01-21"
 }
 
-function toIsoMs(dateOrIso: string): number {
-  const ms = Date.parse(dateOrIso);
-  return Number.isFinite(ms) ? ms : 0;
-}
+export async function GET(req: NextRequest) {
+  const sp = req.nextUrl.searchParams;
+  const fid = sp.get('fid');
+  const startUtc = sp.get('start');
+  const endUtc = sp.get('end');
 
-type SocialResponse = {
-  fid: number;
-  user: {
-    username: string | null;
-    display_name: string | null;
-    pfp_url: string | null;
-    follower_count: number;
-    following_count: number;
-  };
-  window: { start_utc: string; end_utc: string };
-  engagement: { casts: number; likes: number; recasts: number; replies: number };
-  top_posts: Array<{
-    hash: string;
-    text: string;
-    created_at: string;
-    likes: number;
-    recasts: number;
-    replies: number;
-    url: string;
-  }>;
-};
-
-async function neynarFetch(url: string): Promise<unknown> {
-  const apiKey = requireApiKey();
-  const res = await fetch(url, {
-    headers: {
-      api_key: apiKey,
-      accept: 'application/json',
-    },
-    cache: 'no-store',
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Neynar request failed (${res.status}): ${text.slice(0, 250)}`);
+  if (!fid || !startUtc || !endUtc) {
+    return NextResponse.json({ error: 'Missing fid, start, or end' }, { status: 400 });
   }
 
-  return res.json() as Promise<unknown>;
-}
-
-/**
- * Bulk user response (we parse safely)
- */
-function pickUserFromBulkResponse(json: unknown): SocialResponse['user'] {
-  if (!isRecord(json)) {
-    return { username: null, display_name: null, pfp_url: null, follower_count: 0, following_count: 0 };
-  }
-  const users = json['users'];
-  const u0 = Array.isArray(users) && users.length > 0 && isRecord(users[0]) ? users[0] : null;
-
-  if (!u0) {
-    return { username: null, display_name: null, pfp_url: null, follower_count: 0, following_count: 0 };
+  const fidNum = Number(fid);
+  if (!Number.isFinite(fidNum) || fidNum <= 0) {
+    return NextResponse.json({ error: 'Invalid fid' }, { status: 400 });
   }
 
-  return {
-    username: typeof u0['username'] === 'string' ? (u0['username'] as string) : null,
-    display_name: typeof u0['display_name'] === 'string' ? (u0['display_name'] as string) : null,
-    pfp_url: typeof u0['pfp_url'] === 'string' ? (u0['pfp_url'] as string) : null,
-    follower_count: toNumber(u0['follower_count'], 0),
-    following_count: toNumber(u0['following_count'], 0),
-  };
-}
-
-type ExtractedCast = {
-  hash: string;
-  text: string;
-  created_at: string;
-  likes: number;
-  recasts: number;
-  replies: number;
-  url: string;
-};
-
-function extractCastFields(c: Record<string, unknown>): ExtractedCast {
-  const hash = toString(c['hash'], '');
-  const text = toString(c['text'], '');
-  const created_at = toString(c['created_at'], '');
-
-  // Most common Neynar shape:
-  // reactions.likes_count, reactions.recasts_count
-  let likes = 0;
-  let recasts = 0;
-  let replies = 0;
-
-  const reactions = c['reactions'];
-  if (isRecord(reactions)) {
-    likes = toNumber(reactions['likes_count'], 0);
-    recasts = toNumber(reactions['recasts_count'], 0);
+  const startMs = Date.parse(startUtc);
+  const endMs = Date.parse(endUtc);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return NextResponse.json({ error: 'Invalid date format' }, { status: 400 });
   }
 
-  const repliesObj = c['replies'];
-  if (isRecord(repliesObj)) {
-    replies = toNumber(repliesObj['count'], 0);
-  } else {
-    // fallback sometimes exists as replies_count
-    replies = toNumber(c['replies_count'], 0);
-  }
+  const headers: HeadersInit = { accept: 'application/json', 'x-api-key': NEYNAR_API_KEY };
 
-  const url = hash ? `https://warpcast.com/~/cast/${encodeURIComponent(hash)}` : '';
-
-  return { hash, text, created_at, likes, recasts, replies, url };
-}
-
-async function fetchUserCasts(fid: number, maxPages = 10): Promise<Array<Record<string, unknown>>> {
-  const out: Array<Record<string, unknown>> = [];
-  let cursor: string | null = null;
-
-  for (let page = 0; page < maxPages; page++) {
-    const u = new URL(`${NEYNAR_BASE}/farcaster/feed/user/casts`);
-    u.searchParams.set('fid', String(fid));
-    u.searchParams.set('limit', String(NEYNAR_LIMIT)); // ✅ must be 1..50
-    if (cursor) u.searchParams.set('cursor', cursor);
-
-    const json = await neynarFetch(u.toString());
-
-    // casts array
-    let casts: unknown[] = [];
-    if (isRecord(json) && Array.isArray(json['casts'])) {
-      casts = json['casts'] as unknown[];
-    }
-
-    for (const item of casts) {
-      if (isRecord(item)) out.push(item);
-    }
-
-    // next cursor
-    let nextCursor: string | null = null;
-    if (isRecord(json) && isRecord(json['next']) && typeof json['next']['cursor'] === 'string') {
-      nextCursor = json['next']['cursor'] as string;
-    }
-    cursor = nextCursor;
-    if (!cursor) break;
-  }
-
-  return out;
-}
-
-export async function GET(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
-    const fidRaw = searchParams.get('fid');
-    const start = searchParams.get('start');
-    const end = searchParams.get('end');
+    // 1. Fetch user profile
+    const userUrl = `${NEYNAR_BASE}/farcaster/user/bulk?fids=${fidNum}`;
+    const userRes = await fetch(userUrl, { headers, cache: 'no-store' });
+    const userData = (await userRes.json()) as { users?: Array<Record<string, unknown>> };
+    const user = userData.users?.[0] || {};
 
-    const fid = fidRaw ? Number(fidRaw) : NaN;
-    if (!Number.isFinite(fid) || fid <= 0) {
-      return NextResponse.json({ error: 'Missing or invalid fid' }, { status: 400 });
+    // 2. Fetch user's casts (paginated)
+    let allCasts: Array<Record<string, unknown>> = [];
+    let cursor: string | null = null;
+    
+    for (let page = 0; page < 10; page++) {
+      const castsUrl = new URL(`${NEYNAR_BASE}/farcaster/feed/user/casts`);
+      castsUrl.searchParams.set('fid', String(fidNum));
+      castsUrl.searchParams.set('limit', '150');
+      castsUrl.searchParams.set('include_replies', 'true');
+      if (cursor) castsUrl.searchParams.set('cursor', cursor);
+
+      const castsRes = await fetch(castsUrl.toString(), { headers, cache: 'no-store' });
+      const castsData = (await castsRes.json()) as { casts?: Array<Record<string, unknown>>; next?: { cursor?: string } };
+      
+      const pageCasts = castsData.casts || [];
+      allCasts = allCasts.concat(pageCasts);
+      
+      cursor = castsData.next?.cursor || null;
+      if (!cursor || pageCasts.length === 0) break;
+      
+      const oldestCast = pageCasts[pageCasts.length - 1];
+      const oldestMs = Date.parse(toString(oldestCast?.timestamp, ''));
+      if (Number.isFinite(oldestMs) && oldestMs < startMs) break;
     }
-    if (!start || !end) {
-      return NextResponse.json({ error: 'Missing start/end window' }, { status: 400 });
-    }
 
-    const startMs = toIsoMs(start);
-    const endMs = toIsoMs(end);
-    if (!startMs || !endMs || endMs <= startMs) {
-      return NextResponse.json({ error: 'Invalid start/end window' }, { status: 400 });
-    }
-
-    // 1) user info
-    const bulkUrl = new URL(`${NEYNAR_BASE}/farcaster/user/bulk`);
-    bulkUrl.searchParams.set('fids', String(fid));
-    const bulkJson = await neynarFetch(bulkUrl.toString());
-    const user = pickUserFromBulkResponse(bulkJson);
-
-    // 2) casts -> filter in window
-    const allCasts = await fetchUserCasts(fid);
-
+    // 3. Filter casts within the time window
     const inWindow = allCasts.filter((c) => {
-      const created_at = toString(c['created_at'], '');
-      const ms = Date.parse(created_at);
+      const timestamp = toString(c['timestamp'], '');
+      const ms = Date.parse(timestamp);
       if (!Number.isFinite(ms)) return false;
       return ms >= startMs && ms < endMs;
     });
 
-    const extracted = inWindow.map(extractCastFields);
+    // 4. Count engagement
+    let castsCount = 0;
+    let likesReceived = 0;
+    let recastsReceived = 0;
+    let repliesReceived = 0;
 
-    const engagement = extracted.reduce(
-      (acc, c) => {
-        acc.casts += 1;
-        acc.likes += c.likes;
-        acc.recasts += c.recasts;
-        acc.replies += c.replies;
-        return acc;
+    for (const cast of inWindow) {
+      castsCount++;
+      const reactions = cast.reactions as Record<string, unknown> | undefined;
+      const replies = cast.replies as Record<string, unknown> | undefined;
+      
+      likesReceived += toNumber(reactions?.likes_count, 0);
+      recastsReceived += toNumber(reactions?.recasts_count, 0);
+      repliesReceived += toNumber(replies?.count, 0);
+    }
+
+    // 5. Group casts by day, then pick top post for each day
+    const castsByDay: Record<string, Array<Record<string, unknown>>> = {};
+    
+    for (const cast of inWindow) {
+      const timestamp = toString(cast.timestamp, '');
+      const dayKey = getDateKey(timestamp);
+      
+      if (!castsByDay[dayKey]) {
+        castsByDay[dayKey] = [];
+      }
+      castsByDay[dayKey].push(cast);
+    }
+
+    // 6. Get top post for each day (sorted by engagement)
+    const dailyTopPosts: Array<{
+      date: string;
+      hash: string;
+      text: string;
+      created_at: string;
+      likes: number;
+      recasts: number;
+      replies: number;
+      total_engagement: number;
+    }> = [];
+
+    // Sort days chronologically
+    const sortedDays = Object.keys(castsByDay).sort();
+    
+    for (const day of sortedDays) {
+      const dayCasts = castsByDay[day];
+      
+      // Sort by total engagement (likes + recasts + replies)
+      dayCasts.sort((a, b) => {
+        const aReactions = a.reactions as Record<string, unknown> | undefined;
+        const aReplies = a.replies as Record<string, unknown> | undefined;
+        const bReactions = b.reactions as Record<string, unknown> | undefined;
+        const bReplies = b.replies as Record<string, unknown> | undefined;
+        
+        const aScore = toNumber(aReactions?.likes_count, 0) + 
+                       toNumber(aReactions?.recasts_count, 0) + 
+                       toNumber(aReplies?.count, 0);
+        const bScore = toNumber(bReactions?.likes_count, 0) + 
+                       toNumber(bReactions?.recasts_count, 0) + 
+                       toNumber(bReplies?.count, 0);
+        return bScore - aScore;
+      });
+
+      // Take the top post for this day
+      const topCast = dayCasts[0];
+      if (topCast) {
+        const reactions = topCast.reactions as Record<string, unknown> | undefined;
+        const replies = topCast.replies as Record<string, unknown> | undefined;
+        const likes = toNumber(reactions?.likes_count, 0);
+        const recasts = toNumber(reactions?.recasts_count, 0);
+        const repliesCount = toNumber(replies?.count, 0);
+        
+        dailyTopPosts.push({
+          date: day,
+          hash: toString(topCast.hash, ''),
+          text: toString(topCast.text, ''),
+          created_at: toString(topCast.timestamp, ''),
+          likes,
+          recasts,
+          replies: repliesCount,
+          total_engagement: likes + recasts + repliesCount,
+        });
+      }
+    }
+
+    return NextResponse.json({
+      fid: fidNum,
+      user: {
+        username: toString(user.username, null),
+        display_name: toString(user.display_name, null),
+        pfp_url: toString(user.pfp_url, null),
+        follower_count: toNumber(user.follower_count, 0),
+        following_count: toNumber(user.following_count, 0),
       },
-      { casts: 0, likes: 0, recasts: 0, replies: 0 }
-    );
-
-    const top_posts = extracted
-      .slice()
-      .sort((a, b) => b.likes + b.recasts + b.replies - (a.likes + a.recasts + a.replies))
-      .slice(0, 7);
-
-    const out: SocialResponse = {
-      fid,
-      user,
-      window: { start_utc: start, end_utc: end },
-      engagement,
-      top_posts,
-    };
-
-    return NextResponse.json(out, {
-      headers: { 'cache-control': 'no-store, max-age=0' },
+      window: {
+        start_utc: startUtc,
+        end_utc: endUtc,
+      },
+      engagement: {
+        casts: castsCount,
+        likes: likesReceived,
+        recasts: recastsReceived,
+        replies: repliesReceived,
+      },
+      top_posts: dailyTopPosts, // 7 posts - one per day
+      debug: {
+        total_fetched: allCasts.length,
+        in_window: inWindow.length,
+        days_with_posts: sortedDays.length,
+      }
     });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Failed to fetch social data';
-    return NextResponse.json({ error: msg }, { status: 500 });
+  } catch (err) {
+    console.error('Social API error:', err);
+    return NextResponse.json({ error: 'Failed to fetch social data' }, { status: 500 });
   }
 }
