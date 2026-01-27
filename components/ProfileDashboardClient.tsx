@@ -192,21 +192,21 @@ useEffect(() => {
   if (!fid) return;
   if (!profile || 'error' in profile) return;
 
-  const endDay = profile.reward_summary.latest_week_start_utc; // YYYY-MM-DD
+  const endDay = profile.reward_summary.latest_week_start_utc; // "YYYY-MM-DD"
   if (!endDay) return;
 
-  // end = latest week start at 00:00Z
-  const endMs = Date.parse(`${endDay}T00:00:00.000Z`);
-  if (!Number.isFinite(endMs)) return;
+  const endDate = new Date(`${endDay}T00:00:00.000Z`);
+  if (!Number.isFinite(endDate.getTime())) return;
 
-  // start = end - 7 days
-  const startMs = endMs - 7 * 24 * 60 * 60 * 1000;
+  const startDate = new Date(endDate.getTime());
+  startDate.setUTCDate(startDate.getUTCDate() - 7);
 
-  const startIso = new Date(startMs).toISOString();
-  const endIso = new Date(endMs).toISOString();
+  const startIso = startDate.toISOString(); // includes time
+  const endIso = endDate.toISOString();
 
   loadSocial(fid, startIso, endIso);
 }, [fid, profile]);
+
 
   const finalAddress = useMemo(() => {
     if (profile && !('error' in profile)) return profile.address;
