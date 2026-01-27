@@ -1,12 +1,18 @@
 import { NextResponse } from 'next/server';
 
 const NEYNAR_BASE = 'https://api.neynar.com/v2';
-const NEYNAR_LIMIT = 50; // ✅ Neynar v2 requires 1..50
+
+// Neynar requires limit between 1 and 50
+const NEYNAR_LIMIT = 50;
 
 function requireApiKey(): string {
   const k = process.env.NEYNAR_API_KEY;
   if (!k) throw new Error('Missing NEYNAR_API_KEY');
   return k;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null;
 }
 
 function toNumber(v: unknown, fallback = 0): number {
@@ -18,14 +24,9 @@ function toString(v: unknown, fallback = ''): string {
   return typeof v === 'string' ? v : fallback;
 }
 
-function toIsoMs(dateOrMs: string | number): number {
-  if (typeof dateOrMs === 'number') return dateOrMs;
-  const ms = Date.parse(dateOrMs);
+function toIsoMs(dateOrIso: string): number {
+  const ms = Date.parse(dateOrIso);
   return Number.isFinite(ms) ? ms : 0;
-}
-
-function isRecord(x: unknown): x is Record<string, unknown> {
-  return typeof x === 'object' && x !== null;
 }
 
 type SocialResponse = {
@@ -50,7 +51,7 @@ type SocialResponse = {
   }>;
 };
 
-async function neynarFetch<T>(url: string): Promise<T> {
+async function neynarFetch(url: string): Promise<unknown> {
   const apiKey = requireApiKey();
   const res = await fetch(url, {
     headers: {
@@ -62,206 +63,107 @@ async function neynarFetch<T>(url: string): Promise<T> {
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`Neynar request failed (${res.status}): ${text.slice(0, 200)}`);
+    throw new Error(`Neynar request failed (${res.status}): ${text.slice(0, 250)}`);
   }
 
-  return (await res.json()) as T;
+  return res.json() as Promise<unknown>;
 }
 
-type NeynarBulkUser = {
-  username?: string;
-  display_name?: string;
-  pfp_url?: string;
-  follower_count?: number;
-  following_count?: number;
-};
+/**
+ * Bulk user response (we parse safely)
+ */
+function pickUserFromBulkResponse(json: unknown): SocialResponse['user'] {
+  if (!isRecord(json)) {
+    return { username: null, display_name: null, pfp_url: null, follower_count: 0, following_count: 0 };
+  }
+  const users = json['users'];
+  const u0 = Array.isArray(users) && users.length > 0 && isRecord(users[0]) ? users[0] : null;
 
-type NeynarBulkResponse = {
-  users?: NeynarBulkUser[];
-};
-
-function pickUserFromBulkResponse(json: unknown) {
-  const obj = json as NeynarBulkResponse;
-  const u = Array.isArray(obj?.users) ? obj.users[0] : undefined;
-  if (!u) return null;
+  if (!u0) {
+    return { username: null, display_name: null, pfp_url: null, follower_count: 0, following_count: 0 };
+  }
 
   return {
-    username: u.username ?? null,
-    display_name: u.display_name ?? null,
-    pfp_url: u.pfp_url ?? null,
-    follower_count: toNumber(u.follower_count, 0),
-    following_count: toNumber(u.following_count, 0),
+    username: typeof u0['username'] === 'string' ? (u0['username'] as string) : null,
+    display_name: typeof u0['display_name'] === 'string' ? (u0['display_name'] as string) : null,
+    pfp_url: typeof u0['pfp_url'] === 'string' ? (u0['pfp_url'] as string) : null,
+    follower_count: toNumber(u0['follower_count'], 0),
+    following_count: toNumber(u0['following_count'], 0),
   };
 }
 
-type NeynarNext = { cursor?: string };
-
-type NeynarUserCast = {
-  hash?: string;
-  text?: string;
-  created_at?: string;
-  reactions?: { likes_count?: number; recasts_count?: number };
-  replies?: { count?: number };
-  replies_count?: number;
+type ExtractedCast = {
+  hash: string;
+  text: string;
+  created_at: string;
+  likes: number;
+  recasts: number;
+  replies: number;
+  url: string;
 };
 
-type NeynarUserCastsResponse = {
-  casts?: NeynarUserCast[];
-  next?: NeynarNext;
-};
+function extractCastFields(c: Record<string, unknown>): ExtractedCast {
+  const hash = toString(c['hash'], '');
+  const text = toString(c['text'], '');
+  const created_at = toString(c['created_at'], '');
 
-function extractCastFields(c: NeynarUserCast) {
-  const hash = toString(c.hash, '');
-  const text = toString(c.text, '');
-  const createdAt = toString(c.created_at, '');
+  // Most common Neynar shape:
+  // reactions.likes_count, reactions.recasts_count
+  let likes = 0;
+  let recasts = 0;
+  let replies = 0;
 
-  const likes = toNumber(c.reactions?.likes_count, 0);
-  const recasts = toNumber(c.reactions?.recasts_count, 0);
-  const replies = toNumber(c.replies?.count, toNumber(c.replies_count, 0));
+  const reactions = c['reactions'];
+  if (isRecord(reactions)) {
+    likes = toNumber(reactions['likes_count'], 0);
+    recasts = toNumber(reactions['recasts_count'], 0);
+  }
+
+  const repliesObj = c['replies'];
+  if (isRecord(repliesObj)) {
+    replies = toNumber(repliesObj['count'], 0);
+  } else {
+    // fallback sometimes exists as replies_count
+    replies = toNumber(c['replies_count'], 0);
+  }
 
   const url = hash ? `https://warpcast.com/~/cast/${encodeURIComponent(hash)}` : '';
-  return { hash, text, created_at: createdAt, likes, recasts, replies, url };
+
+  return { hash, text, created_at, likes, recasts, replies, url };
 }
 
-async function fetchAllUserCasts(fid: number, maxPages = 10) {
-  const casts: NeynarUserCast[] = [];
+async function fetchUserCasts(fid: number, maxPages = 10): Promise<Array<Record<string, unknown>>> {
+  const out: Array<Record<string, unknown>> = [];
   let cursor: string | null = null;
 
   for (let page = 0; page < maxPages; page++) {
     const u = new URL(`${NEYNAR_BASE}/farcaster/feed/user/casts`);
     u.searchParams.set('fid', String(fid));
-    u.searchParams.set('limit', String(NEYNAR_LIMIT)); // ✅ 50 max
+    u.searchParams.set('limit', String(NEYNAR_LIMIT)); // ✅ must be 1..50
     if (cursor) u.searchParams.set('cursor', cursor);
 
-    const json = await neynarFetch<NeynarUserCastsResponse>(u.toString());
-    const items = Array.isArray(json.casts) ? json.casts : [];
-    casts.push(...items);
+    const json = await neynarFetch(u.toString());
 
-    const nextCursor = typeof json.next?.cursor === 'string' ? json.next.cursor : null;
-    cursor = nextCursor;
-    if (!cursor) break;
-  }
-
-  return casts;
-}
-
-/**
- * Replies + Recasts by the user.
- * Response shape can differ; we parse safely.
- */
-async function fetchRepliesAndRecasts(fid: number, maxPages = 10): Promise<Array<Record<string, unknown>>> {
-  const out: Array<Record<string, unknown>> = [];
-  let cursor: string | null = null;
-
-  for (let page = 0; page < maxPages; page++) {
-    const u = new URL(`${NEYNAR_BASE}/farcaster/feed/user/replies_and_recasts`);
-    u.searchParams.set('fid', String(fid));
-    u.searchParams.set('limit', String(NEYNAR_LIMIT)); // ✅ 50 max
-    if (cursor) u.searchParams.set('cursor', cursor);
-
-    const json = await neynarFetch<unknown>(u.toString());
-
-    let items: unknown[] = [];
-    if (isRecord(json)) {
-      const maybeCasts = json['casts'];
-      if (Array.isArray(maybeCasts)) items = maybeCasts;
-      const maybeItems = json['items'];
-      if (!items.length && Array.isArray(maybeItems)) items = maybeItems;
-      const maybeResult = json['result'];
-      if (!items.length && Array.isArray(maybeResult)) items = maybeResult;
+    // casts array
+    let casts: unknown[] = [];
+    if (isRecord(json) && Array.isArray(json['casts'])) {
+      casts = json['casts'] as unknown[];
     }
 
-    for (const it of items) {
-      if (isRecord(it)) out.push(it);
+    for (const item of casts) {
+      if (isRecord(item)) out.push(item);
     }
 
+    // next cursor
     let nextCursor: string | null = null;
     if (isRecord(json) && isRecord(json['next']) && typeof json['next']['cursor'] === 'string') {
-      nextCursor = json['next']['cursor'];
+      nextCursor = json['next']['cursor'] as string;
     }
     cursor = nextCursor;
     if (!cursor) break;
   }
 
   return out;
-}
-
-/**
- * Likes made by the user (outgoing).
- */
-async function fetchUserLikes(fid: number, maxPages = 10): Promise<Array<Record<string, unknown>>> {
-  const out: Array<Record<string, unknown>> = [];
-  let cursor: string | null = null;
-
-  for (let page = 0; page < maxPages; page++) {
-    const u = new URL(`${NEYNAR_BASE}/farcaster/reactions/user`);
-    u.searchParams.set('fid', String(fid));
-    u.searchParams.set('limit', String(NEYNAR_LIMIT)); // ✅ 50 max
-    u.searchParams.set('reaction_type', 'like');
-    if (cursor) u.searchParams.set('cursor', cursor);
-
-    const json = await neynarFetch<unknown>(u.toString());
-
-    let items: unknown[] = [];
-    if (isRecord(json)) {
-      const maybe = json['reactions'];
-      if (Array.isArray(maybe)) items = maybe;
-      const maybe2 = json['items'];
-      if (!items.length && Array.isArray(maybe2)) items = maybe2;
-    }
-
-    for (const it of items) {
-      if (isRecord(it)) out.push(it);
-    }
-
-    let nextCursor: string | null = null;
-    if (isRecord(json) && isRecord(json['next']) && typeof json['next']['cursor'] === 'string') {
-      nextCursor = json['next']['cursor'];
-    }
-    cursor = nextCursor;
-    if (!cursor) break;
-  }
-
-  return out;
-}
-
-function extractCreatedAtMs(obj: Record<string, unknown>): number {
-  const direct = obj['created_at'];
-  if (typeof direct === 'string') return toIsoMs(direct);
-
-  const ts = obj['timestamp'];
-  if (typeof ts === 'string' || typeof ts === 'number') return toIsoMs(ts);
-
-  if (isRecord(obj['reaction'])) {
-    const r = obj['reaction'];
-    const rca = r['created_at'];
-    if (typeof rca === 'string') return toIsoMs(rca);
-  }
-
-  if (isRecord(obj['cast'])) {
-    const c = obj['cast'];
-    const ca = c['created_at'];
-    if (typeof ca === 'string') return toIsoMs(ca);
-  }
-
-  return 0;
-}
-
-function classifyReplyOrRecast(obj: Record<string, unknown>): 'reply' | 'recast' | 'unknown' {
-  const t = obj['type'];
-  if (typeof t === 'string') {
-    const s = t.toLowerCase();
-    if (s.includes('reply')) return 'reply';
-    if (s.includes('recast')) return 'recast';
-  }
-
-  const rt = obj['reaction_type'];
-  if (typeof rt === 'string' && rt.toLowerCase().includes('recast')) return 'recast';
-
-  if (isRecord(obj['recasted_cast'])) return 'recast';
-  if (typeof obj['parent_hash'] === 'string') return 'reply';
-
-  return 'unknown';
 }
 
 export async function GET(req: Request) {
@@ -285,61 +187,45 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Invalid start/end window' }, { status: 400 });
     }
 
-    // 1) User profile
+    // 1) user info
     const bulkUrl = new URL(`${NEYNAR_BASE}/farcaster/user/bulk`);
     bulkUrl.searchParams.set('fids', String(fid));
-    const bulk = await neynarFetch<unknown>(bulkUrl.toString());
+    const bulkJson = await neynarFetch(bulkUrl.toString());
+    const user = pickUserFromBulkResponse(bulkJson);
 
-    const user =
-      pickUserFromBulkResponse(bulk) ??
-      ({ username: null, display_name: null, pfp_url: null, follower_count: 0, following_count: 0 } as const);
+    // 2) casts -> filter in window
+    const allCasts = await fetchUserCasts(fid);
 
-    // 2) Casts for casts count + top posts
-    const allCasts = await fetchAllUserCasts(fid);
-    const castsInWindow = allCasts.filter((c) => {
-      const ms = Date.parse(toString(c.created_at, ''));
-      return Number.isFinite(ms) && ms >= startMs && ms < endMs;
+    const inWindow = allCasts.filter((c) => {
+      const created_at = toString(c['created_at'], '');
+      const ms = Date.parse(created_at);
+      if (!Number.isFinite(ms)) return false;
+      return ms >= startMs && ms < endMs;
     });
 
-    const extractedCasts = castsInWindow.map(extractCastFields);
-    const top_posts = extractedCasts
+    const extracted = inWindow.map(extractCastFields);
+
+    const engagement = extracted.reduce(
+      (acc, c) => {
+        acc.casts += 1;
+        acc.likes += c.likes;
+        acc.recasts += c.recasts;
+        acc.replies += c.replies;
+        return acc;
+      },
+      { casts: 0, likes: 0, recasts: 0, replies: 0 }
+    );
+
+    const top_posts = extracted
       .slice()
       .sort((a, b) => b.likes + b.recasts + b.replies - (a.likes + a.recasts + a.replies))
       .slice(0, 7);
-
-    // 3) Replies + Recasts (outgoing)
-    const rr = await fetchRepliesAndRecasts(fid);
-    let replies = 0;
-    let recasts = 0;
-
-    for (const item of rr) {
-      const ms = extractCreatedAtMs(item);
-      if (!ms || ms < startMs || ms >= endMs) continue;
-
-      const kind = classifyReplyOrRecast(item);
-      if (kind === 'reply') replies += 1;
-      else if (kind === 'recast') recasts += 1;
-    }
-
-    // 4) Likes (outgoing)
-    const likesItems = await fetchUserLikes(fid);
-    let likes = 0;
-    for (const item of likesItems) {
-      const ms = extractCreatedAtMs(item);
-      if (!ms || ms < startMs || ms >= endMs) continue;
-      likes += 1;
-    }
 
     const out: SocialResponse = {
       fid,
       user,
       window: { start_utc: start, end_utc: end },
-      engagement: {
-        casts: castsInWindow.length,
-        likes,
-        recasts,
-        replies,
-      },
+      engagement,
       top_posts,
     };
 
@@ -347,9 +233,7 @@ export async function GET(req: Request) {
       headers: { 'cache-control': 'no-store, max-age=0' },
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: (e as Error)?.message || 'Failed to fetch social data' },
-      { status: 500 }
-    );
+    const msg = e instanceof Error ? e.message : 'Failed to fetch social data';
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
