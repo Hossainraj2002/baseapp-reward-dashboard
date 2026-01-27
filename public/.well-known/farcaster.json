@@ -10,7 +10,7 @@
     "homeUrl": "https://baseapp-reward-dashboard.vercel.app/",
     "iconUrl": "https://baseapp-reward-dashboard.vercel.app/icon.png",
     "splashImageUrl": "https://baseapp-reward-dashboard.vercel.app/splash.png",
-    "splashBackgroundColor": "#0000FF",
+    "splashBackgroundColor": "#FFFFFF",
     "primaryCategory": "finance",
     "tags": ["base", "rewards", "usdc", "leaderboard", "analytics"],
     "tagline": "Track Base app USDC rewards",
