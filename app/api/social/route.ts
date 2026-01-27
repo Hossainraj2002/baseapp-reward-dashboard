@@ -171,9 +171,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       fid: fidNum,
       user: {
-        username: toString(user.username, null),
-        display_name: toString(user.display_name, null),
-        pfp_url: toString(user.pfp_url, null),
+        username: toString(user.username, ''),
+        display_name: toString(user.display_name, ''),
+        pfp_url: toString(user.pfp_url, ''),
         follower_count: toNumber(user.follower_count, 0),
         following_count: toNumber(user.following_count, 0),
       },
