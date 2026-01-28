@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { lookupFarcasterUserByAddress } from '@/lib/farcasterStore';
 
 type WeeklyJson = {
   weeks: Array<{
@@ -106,9 +107,6 @@ export function buildProfilePayload(address: string): ProfilePayload {
 
   const allTimeTotal = userAllTime ? num(userAllTime.total_usdc) : 0;
 
-  // Best source of weekly amounts:
-  // - indexer stores per-week totals in all_time row: weeks[wk] (if present)
-  // - else fall back to weekly_latest row fields
   const latestWeekTotal =
     (userAllTime?.weeks && latestWeekKey && userAllTime.weeks[latestWeekKey] != null
       ? num(userAllTime.weeks[latestWeekKey])
@@ -123,13 +121,12 @@ export function buildProfilePayload(address: string): ProfilePayload {
         ? num(userLatestRow.previous_week_usdc)
         : 0;
 
-  const totalWeeksEarned = userAllTime?.total_weeks_earned ?? (userAllTime?.weeks ? Object.keys(userAllTime.weeks).length : 0);
+  const totalWeeksEarned =
+    userAllTime?.total_weeks_earned ?? (userAllTime?.weeks ? Object.keys(userAllTime.weeks).length : 0);
 
-  // ✅ Bug 1 fix: pct_change
   const pctChange =
     prevWeekTotal > 0 ? (((latestWeekTotal - prevWeekTotal) / prevWeekTotal) * 100).toFixed(1) : null;
 
-  // Reward history (from all_time weeks map if available)
   const history: ProfilePayload['reward_history'] = [];
   const weeksMap = userAllTime?.weeks || {};
 
@@ -149,9 +146,16 @@ export function buildProfilePayload(address: string): ProfilePayload {
 
   history.sort((a, b) => a.week_number - b.week_number);
 
+  // V2: local Farcaster lookup (no runtime Neynar)
+  const fcLite = lookupFarcasterUserByAddress(address);
+  const farcaster =
+    fcLite && fcLite.username
+      ? { fid: fcLite.fid, username: fcLite.username, pfp_url: fcLite.pfp_url }
+      : null;
+
   return {
     address,
-    farcaster: null, // we will add Neynar later (needs FID/auth flow)
+    farcaster,
     reward_summary: {
       all_time_usdc: allTimeTotal,
       total_weeks_earned: totalWeeksEarned,

@@ -48,16 +48,55 @@ export default function ProfileView({
       <div style={{ marginBottom: 12 }}>
         <div className="h1">Profile</div>
 
-        <div className="subtle" style={{ marginTop: 6 }}>
+        <div className="subtle" style={{ marginTop: 10 }}>
           {data.farcaster ? (
-            <span>
-              @{data.farcaster.username} (FID {data.farcaster.fid})
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                {data.farcaster.pfp_url ? (
+                  <img
+                    src={data.farcaster.pfp_url}
+                    alt=""
+                    style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: 999,
+                      objectFit: 'cover',
+                      border: '1px solid rgba(10,10,10,0.12)',
+                      background: '#FFFFFF',
+                      flex: '0 0 auto',
+                    }}
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: 999,
+                      border: '1px solid rgba(10,10,10,0.12)',
+                      background: '#FFFFFF',
+                      flex: '0 0 auto',
+                    }}
+                  />
+                )}
+
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 900, color: '#0A0A0A', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    @{data.farcaster.username}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#6B7280' }}>FID {data.farcaster.fid}</div>
+                </div>
+              </div>
+
+              <CopyButton value={data.address} mode="icon" />
+            </div>
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
-              <div style={{ fontWeight: 900, color: '#0A0A0A', wordBreak: 'break-all' }}>
-                {data.address}
-              </div>
+              <div style={{ fontWeight: 900, color: '#0A0A0A', wordBreak: 'break-all' }}>{data.address}</div>
               <CopyButton value={data.address} mode="icon" />
             </div>
           )}
@@ -70,7 +109,6 @@ export default function ProfileView({
         ) : null}
       </div>
 
-      {/* Reward summary */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
         <StatCard title="All-time USDC" value={'$' + formatUSDC(data.reward_summary.all_time_usdc)} />
         <StatCard title="Weeks earned" value={String(data.reward_summary.total_weeks_earned)} />
@@ -91,12 +129,9 @@ export default function ProfileView({
 
       <div className="card card-pad" style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 13, fontWeight: 900, marginBottom: 6 }}>Percent change</div>
-        <div className="subtle">
-          {data.reward_summary.pct_change == null ? '—' : `${data.reward_summary.pct_change}%`}
-        </div>
+        <div className="subtle">{data.reward_summary.pct_change == null ? '—' : `${data.reward_summary.pct_change}%`}</div>
       </div>
 
-      {/* Reward history */}
       <div className="card" style={{ overflow: 'hidden', marginBottom: 12 }}>
         <div
           style={{
@@ -134,28 +169,20 @@ export default function ProfileView({
         )}
       </div>
 
-      {/* Social stats placeholder */}
       <div className="card card-pad" style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 13, fontWeight: 900, marginBottom: 6 }}>Social stats</div>
-        <div className="subtle">
-          Coming next phase. This section will show Farcaster stats using FID + Neynar.
-        </div>
+        <div className="subtle">Coming next phase. This section will show Farcaster stats using FID + Neynar.</div>
       </div>
 
-      {/* Support creator */}
       <div className="card card-pad">
-        <div style={{ fontSize: 13, fontWeight: 900, marginBottom: 6 }}>
-          Created by {data.meta.created_by}
-        </div>
+        <div style={{ fontSize: 13, fontWeight: 900, marginBottom: 6 }}>Created by {data.meta.created_by}</div>
 
         <div className="subtle" style={{ marginBottom: 8 }}>
           Support creator
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
-          <div style={{ fontSize: 13, fontWeight: 900, wordBreak: 'break-all' }}>
-            {data.meta.support_address}
-          </div>
+          <div style={{ fontSize: 13, fontWeight: 900, wordBreak: 'break-all' }}>{data.meta.support_address}</div>
           <CopyButton value={data.meta.support_address} mode="icon" />
         </div>
       </div>

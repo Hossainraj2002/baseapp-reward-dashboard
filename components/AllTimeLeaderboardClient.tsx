@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 type Row = {
   all_time_rank: number;
@@ -14,9 +14,16 @@ type Row = {
 type Props = {
   initialData: {
     generated_at_utc: string;
-    week_keys: string[]; // ISO week-start keys (source of truth)
+    week_keys: string[];
     rows: Row[];
   };
+};
+
+type FarcasterUserLite = {
+  fid: number;
+  username: string | null;
+  display_name: string | null;
+  pfp_url: string | null;
 };
 
 function downloadText(filename: string, content: string, mime: string) {
@@ -43,16 +50,26 @@ function formatUSDCFromString(s: string) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+function shortAddress(addr: string) {
+  const a = addr.trim();
+  if (!/^0x[a-fA-F0-9]{40}$/.test(a)) return a;
+  return `${a.slice(0, 6)}…${a.slice(-4)}`;
+}
+
+function displayLabel(fc: FarcasterUserLite | null, fallback: string) {
+  if (fc?.username) return `@${fc.username}`;
+  if (fc?.display_name) return fc.display_name;
+  return fallback;
+}
+
 export default function AllTimeLeaderboardClient(props: Props) {
-  const weekKeysChrono = props.initialData.week_keys; // old -> new
+  const weekKeysChrono = props.initialData.week_keys;
   const rows = props.initialData.rows;
 
-  // DISPLAY ORDER: latest week first, then previous weeks
   const weekKeysDisplay = useMemo(() => {
     return [...weekKeysChrono].reverse();
   }, [weekKeysChrono]);
 
-  // DISPLAY LABELS: Week 1..Week N (based on chronological order)
   const weekLabelByKey = useMemo(() => {
     const map: Record<string, string> = {};
     for (let i = 0; i < weekKeysChrono.length; i++) {
@@ -83,6 +100,38 @@ export default function AllTimeLeaderboardClient(props: Props) {
     return filtered.slice(start, start + pageSize);
   }, [filtered, safePage]);
 
+  const [fcByAddress, setFcByAddress] = useState<Record<string, FarcasterUserLite | null>>({});
+
+  useEffect(() => {
+    const addresses = pageRows
+      .map((r) => r.address.toLowerCase())
+      .filter((a) => /^0x[a-f0-9]{40}$/.test(a));
+
+    const missing = addresses.filter((a) => !(a in fcByAddress));
+    if (missing.length === 0) return;
+
+    const controller = new AbortController();
+
+    async function run() {
+      try {
+        const qs = encodeURIComponent(missing.join(','));
+        const res = await fetch(`/api/farcaster-users?addresses=${qs}`, { signal: controller.signal });
+        if (!res.ok) return;
+
+        const json = (await res.json()) as { users?: Record<string, FarcasterUserLite | null> };
+        const incoming = json.users || {};
+        setFcByAddress((prev) => ({ ...prev, ...incoming }));
+      } catch {
+        // ignore
+      }
+    }
+
+    void run();
+
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageRows]);
+
   function exportJson() {
     const payload = JSON.stringify(
       {
@@ -97,17 +146,11 @@ export default function AllTimeLeaderboardClient(props: Props) {
   }
 
   function exportCsv() {
-    // Export stays stable using ISO keys
     const header = ['all_time_rank', 'address', 'total_usdc', 'total_weeks_earned', ...weekKeysChrono].join(',');
     const lines: string[] = [header];
 
     for (const r of filtered) {
-      const baseCols = [
-        String(r.all_time_rank),
-        r.address,
-        String(num(r.total_usdc)),
-        String(r.total_weeks_earned),
-      ];
+      const baseCols = [String(r.all_time_rank), r.address, String(num(r.total_usdc)), String(r.total_weeks_earned)];
 
       const weekCols = weekKeysChrono.map((wk) => {
         const v = r.weeks && r.weeks[wk] ? num(r.weeks[wk]) : 0;
@@ -137,7 +180,6 @@ export default function AllTimeLeaderboardClient(props: Props) {
 
   return (
     <div>
-      {/* SMALL CONTROLS */}
       <div style={controlsRow}>
         <input
           value={query}
@@ -189,7 +231,6 @@ export default function AllTimeLeaderboardClient(props: Props) {
         </div>
       </div>
 
-      {/* TABLE */}
       <div style={tableWrap}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
@@ -197,11 +238,7 @@ export default function AllTimeLeaderboardClient(props: Props) {
               <col style={{ width: COL_RANK }} />
               <col style={{ width: COL_USER }} />
               <col style={{ width: COL_TOTAL }} />
-
-              {/* Latest week column (NOT sticky) */}
               {latestWeekKey ? <col style={{ width: COL_WEEK }} /> : null}
-
-              {/* Remaining weeks (NOT sticky) */}
               {weekKeysDisplay
                 .filter((wk) => wk !== latestWeekKey)
                 .map((wk) => (
@@ -215,9 +252,7 @@ export default function AllTimeLeaderboardClient(props: Props) {
                 <th style={thStickyUser}>User</th>
                 <th style={thStickyTotal}>Total</th>
 
-                {latestWeekKey ? (
-                  <th style={th}>{weekLabelByKey[latestWeekKey] || 'Latest'}</th>
-                ) : null}
+                {latestWeekKey ? <th style={th}>{weekLabelByKey[latestWeekKey] || 'Latest'}</th> : null}
 
                 {weekKeysDisplay
                   .filter((wk) => wk !== latestWeekKey)
@@ -230,52 +265,60 @@ export default function AllTimeLeaderboardClient(props: Props) {
             </thead>
 
             <tbody>
-              {pageRows.map((r) => (
-                <tr key={r.address} style={{ borderTop: '1px solid rgba(10,10,10,0.08)' }}>
-                  {/* Rank column ONLY light blue */}
-                  <td style={tdStickyRank}>{r.all_time_rank}</td>
+              {pageRows.map((r) => {
+                const key = r.address.toLowerCase();
+                const fc = fcByAddress[key] ?? null;
 
-                  <td style={tdStickyUser}>
-                    <a
-                      href={'/find/' + r.address}
-                      style={{
-                        color: '#0A0A0A',
-                        textDecoration: 'none',
-                        fontWeight: 900,
-                        display: 'block',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        textAlign: 'center',
-                      }}
-                      title={r.user_display}
-                    >
-                      {r.user_display}
-                    </a>
-                  </td>
+                const fallback = r.user_display || shortAddress(r.address);
+                const label = displayLabel(fc, fallback);
 
-                  <td style={tdStickyTotal}>${formatUSDCFromString(r.total_usdc)}</td>
+                return (
+                  <tr key={r.address} style={{ borderTop: '1px solid rgba(10,10,10,0.08)' }}>
+                    <td style={tdStickyRank}>{r.all_time_rank}</td>
 
-                  {latestWeekKey ? (
-                    <td style={td}>
-                      {r.weeks && r.weeks[latestWeekKey]
-                        ? '$' + formatUSDCFromString(r.weeks[latestWeekKey])
-                        : ''}
+                    <td style={tdStickyUser}>
+                      <a href={'/find/' + r.address} style={userLink} title={label}>
+                        <span style={userCell}>
+                          {fc?.pfp_url ? (
+                            <img
+                              src={fc.pfp_url}
+                              alt=""
+                              style={avatarImg}
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).style.display = 'none';
+                              }}
+                            />
+                          ) : (
+                            <span style={avatarFallback} />
+                          )}
+                          <span style={userText}>{label}</span>
+                        </span>
+                      </a>
                     </td>
-                  ) : null}
 
-                  {weekKeysDisplay
-                    .filter((wk) => wk !== latestWeekKey)
-                    .map((wk) => {
-                      const v = r.weeks && r.weeks[wk] ? formatUSDCFromString(r.weeks[wk]) : '';
-                      return (
-                        <td key={wk} style={td}>
-                          {v ? '$' + v : ''}
-                        </td>
-                      );
-                    })}
-                </tr>
-              ))}
+                    <td style={tdStickyTotal}>${formatUSDCFromString(r.total_usdc)}</td>
+
+                    {latestWeekKey ? (
+                      <td style={td}>
+                        {r.weeks && r.weeks[latestWeekKey] ? '$' + formatUSDCFromString(r.weeks[latestWeekKey]) : ''}
+                      </td>
+                    ) : null}
+
+                    {weekKeysDisplay
+                      .filter((wk) => wk !== latestWeekKey)
+                      .map((wk) => {
+                        const v = r.weeks && r.weeks[wk] ? formatUSDCFromString(r.weeks[wk]) : '';
+                        return (
+                          <td key={wk} style={td}>
+                            {v ? '$' + v : ''}
+                          </td>
+                        );
+                      })}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -290,7 +333,7 @@ export default function AllTimeLeaderboardClient(props: Props) {
 
 /* ---------- Sizes: these 3 sticky cols <= 60% ---------- */
 const COL_RANK = 35;
-const COL_USER = 120;
+const COL_USER = 150;
 const COL_TOTAL = 60;
 const COL_WEEK = 60;
 
@@ -349,7 +392,6 @@ const tdBase: React.CSSProperties = {
   fontWeight: 900,
 };
 
-/* Sticky: ONLY Rank + User + Total */
 const thStickyRank: React.CSSProperties = {
   ...thBase,
   position: 'sticky',
@@ -397,3 +439,49 @@ const tdStickyTotal: React.CSSProperties = {
 };
 
 const td: React.CSSProperties = tdBase;
+
+const userLink: React.CSSProperties = {
+  color: '#0A0A0A',
+  textDecoration: 'none',
+  fontWeight: 900,
+  display: 'block',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  textAlign: 'center',
+};
+
+const userCell: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  maxWidth: '100%',
+};
+
+const userText: React.CSSProperties = {
+  display: 'inline-block',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  maxWidth: 110,
+};
+
+const avatarImg: React.CSSProperties = {
+  width: 20,
+  height: 20,
+  borderRadius: 999,
+  objectFit: 'cover',
+  border: '1px solid rgba(10,10,10,0.12)',
+  background: '#FFFFFF',
+  flex: '0 0 auto',
+};
+
+const avatarFallback: React.CSSProperties = {
+  width: 20,
+  height: 20,
+  borderRadius: 999,
+  background: '#FFFFFF',
+  border: '1px solid rgba(10,10,10,0.12)',
+  flex: '0 0 auto',
+};
