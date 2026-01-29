@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 type Row = {
   rank: number;
@@ -27,6 +27,13 @@ type Props = {
   };
 };
 
+type FarcasterUserLite = {
+  fid: number;
+  username: string | null;
+  display_name: string | null;
+  pfp_url: string | null;
+};
+
 const DEEP_BLUE = '#0000FF';
 const LIGHT_BLUE = '#A5D2FF';
 
@@ -37,6 +44,18 @@ function formatUSDC(n: number) {
 function formatPct(p: number | null) {
   if (p === null) return '-';
   return p.toLocaleString(undefined, { maximumFractionDigits: 2 }) + '%';
+}
+
+function shortAddress(addr: string) {
+  const a = addr.trim();
+  if (!/^0x[a-fA-F0-9]{40}$/.test(a)) return a;
+  return `${a.slice(0, 6)}…${a.slice(-4)}`;
+}
+
+function displayLabel(fc: FarcasterUserLite | null, fallback: string) {
+  if (fc?.username) return `@${fc.username}`;
+  if (fc?.display_name) return fc.display_name;
+  return fallback;
 }
 
 function downloadText(filename: string, content: string, mime: string) {
@@ -55,11 +74,10 @@ function downloadText(filename: string, content: string, mime: string) {
 
 /** Column sizing: sticky Rank+User must be < 40% width */
 const COL_RANK = 40;
-const COL_USER = 120;
+const COL_USER = 140;
 const COL_NUM = 111;
 
 export default function WeeklyLeaderboardClient(props: Props) {
-  // IMPORTANT: keep original logic contract. If initialData is missing, that is a real bug.
   const rows = props.initialData.rows;
 
   const [query, setQuery] = useState('');
@@ -82,13 +100,40 @@ export default function WeeklyLeaderboardClient(props: Props) {
     return filtered.slice(start, start + pageSize);
   }, [filtered, safePage]);
 
+  const [fcByAddress, setFcByAddress] = useState<Record<string, FarcasterUserLite | null>>({});
+
+  useEffect(() => {
+    const addresses = pageRows
+      .map((r) => r.address.toLowerCase())
+      .filter((a) => /^0x[a-f0-9]{40}$/.test(a));
+
+    const missing = addresses.filter((a) => !(a in fcByAddress));
+    if (missing.length === 0) return;
+
+    const controller = new AbortController();
+
+    async function run() {
+      try {
+        const qs = encodeURIComponent(missing.join(','));
+        const res = await fetch(`/api/farcaster-users?addresses=${qs}`, { signal: controller.signal });
+        if (!res.ok) return;
+        const json = (await res.json()) as { users?: Record<string, FarcasterUserLite | null> };
+        const incoming = json.users || {};
+        setFcByAddress((prev) => ({ ...prev, ...incoming }));
+      } catch {
+        // ignore
+      }
+    }
+
+    void run();
+
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageRows]);
+
   function exportJson() {
     const name = 'weekly_' + props.initialData.week.week_start_utc + '.json';
-    const payload = JSON.stringify(
-      { week: props.initialData.week, rows: filtered },
-      null,
-      2
-    );
+    const payload = JSON.stringify({ week: props.initialData.week, rows: filtered }, null, 2);
     downloadText(name, payload, 'application/json');
   }
 
@@ -98,16 +143,7 @@ export default function WeeklyLeaderboardClient(props: Props) {
 
     for (const r of filtered) {
       const pct = r.pct_change === null ? '' : String(r.pct_change);
-      lines.push(
-        [
-          String(r.rank),
-          r.address,
-          String(r.this_week_usdc),
-          String(r.previous_week_usdc),
-          pct,
-          String(r.all_time_usdc),
-        ].join(',')
-      );
+      lines.push([String(r.rank), r.address, String(r.this_week_usdc), String(r.previous_week_usdc), pct, String(r.all_time_usdc)].join(','));
     }
 
     const name = 'weekly_' + props.initialData.week.week_start_utc + '.csv';
@@ -131,7 +167,6 @@ export default function WeeklyLeaderboardClient(props: Props) {
 
   return (
     <div>
-      {/* Controls: compact, deep-blue outline */}
       <div style={controlsRow}>
         <input
           value={query}
@@ -159,8 +194,7 @@ export default function WeeklyLeaderboardClient(props: Props) {
         </button>
 
         <div style={pageText}>
-          Page <span style={{ fontWeight: 900 }}>{safePage}</span> / {totalPages} (
-          {filtered.length.toLocaleString()} rows)
+          Page <span style={{ fontWeight: 900 }}>{safePage}</span> / {totalPages} ({filtered.length.toLocaleString()} rows)
         </div>
 
         <button type="button" onClick={goNext} style={btnStyle}>
@@ -181,7 +215,6 @@ export default function WeeklyLeaderboardClient(props: Props) {
         </div>
       </div>
 
-      {/* Table: deep-blue header, light-blue rank column, rest white */}
       <div style={tableWrap}>
         <div style={{ overflowX: 'auto' }}>
           <table
@@ -189,7 +222,7 @@ export default function WeeklyLeaderboardClient(props: Props) {
               width: '100%',
               borderCollapse: 'collapse',
               tableLayout: 'fixed',
-              minWidth: 660,
+              minWidth: 680,
               background: '#ffffff',
             }}
           >
@@ -214,35 +247,45 @@ export default function WeeklyLeaderboardClient(props: Props) {
             </thead>
 
             <tbody>
-              {pageRows.map((r) => (
-                <tr key={r.address} style={{ borderTop: '1px solid rgba(0,0,0,0.08)' }}>
-                  <td style={tdStickyRank}>{r.rank}</td>
+              {pageRows.map((r) => {
+                const key = r.address.toLowerCase();
+                const fc = fcByAddress[key] ?? null;
+                const fallback = r.user_display || shortAddress(r.address);
+                const label = displayLabel(fc, fallback);
 
-                  <td style={tdStickyUser}>
-                    <a
-                      href={'/find/' + r.address}
-                      style={{
-                        color: '#000000',
-                        textDecoration: 'none',
-                        fontWeight: 900,
-                        display: 'block',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        textAlign: 'center',
-                      }}
-                      title={r.address}
-                    >
-                      {r.user_display}
-                    </a>
-                  </td>
+                return (
+                  <tr key={r.address} style={{ borderTop: '1px solid rgba(0,0,0,0.08)' }}>
+                    <td style={tdStickyRank}>{r.rank}</td>
 
-                  <td style={td}>${formatUSDC(r.this_week_usdc)}</td>
-                  <td style={td}>${formatUSDC(r.previous_week_usdc)}</td>
-                  <td style={td}>{formatPct(r.pct_change)}</td>
-                  <td style={td}>${formatUSDC(r.all_time_usdc)}</td>
-                </tr>
-              ))}
+                    <td style={tdStickyUser}>
+                      <a href={'/find/' + r.address} style={userLink} title={label}>
+                        <span style={userCell}>
+                          {fc?.pfp_url ? (
+                            <img
+                              src={fc.pfp_url}
+                              alt=""
+                              style={avatarImg}
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).style.display = 'none';
+                              }}
+                            />
+                          ) : (
+                            <span style={avatarFallback} />
+                          )}
+                          <span style={userText}>{label}</span>
+                        </span>
+                      </a>
+                    </td>
+
+                    <td style={td}>${formatUSDC(r.this_week_usdc)}</td>
+                    <td style={td}>${formatUSDC(r.previous_week_usdc)}</td>
+                    <td style={td}>{formatPct(r.pct_change)}</td>
+                    <td style={td}>${formatUSDC(r.all_time_usdc)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -364,4 +407,50 @@ const tdStickyUser: React.CSSProperties = {
   zIndex: 4,
   background: '#ffffff',
   color: '#000000',
+};
+
+const userLink: React.CSSProperties = {
+  color: '#000000',
+  textDecoration: 'none',
+  fontWeight: 900,
+  display: 'block',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  textAlign: 'center',
+};
+
+const userCell: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  maxWidth: '100%',
+};
+
+const userText: React.CSSProperties = {
+  display: 'inline-block',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  maxWidth: 120,
+};
+
+const avatarImg: React.CSSProperties = {
+  width: 20,
+  height: 20,
+  borderRadius: 999,
+  objectFit: 'cover',
+  border: '1px solid rgba(10,10,10,0.12)',
+  background: '#FFFFFF',
+  flex: '0 0 auto',
+};
+
+const avatarFallback: React.CSSProperties = {
+  width: 20,
+  height: 20,
+  borderRadius: 999,
+  background: '#FFFFFF',
+  border: '1px solid rgba(10,10,10,0.12)',
+  flex: '0 0 auto',
 };

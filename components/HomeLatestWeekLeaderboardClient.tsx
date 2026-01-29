@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 type Row = {
   rank: number;
@@ -16,6 +16,13 @@ type Props = {
   rows: Row[];
 };
 
+type FarcasterUserLite = {
+  fid: number;
+  username: string | null;
+  display_name: string | null;
+  pfp_url: string | null;
+};
+
 function formatUSDC(v: string | number | undefined) {
   if (v === undefined) return '-';
   const n = typeof v === 'number' ? v : Number(v);
@@ -28,6 +35,18 @@ function formatPct(v: string | number | null | undefined) {
   const n = typeof v === 'number' ? v : Number(v);
   if (!Number.isFinite(n)) return '-';
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 }) + '%';
+}
+
+function shortAddress(addr: string) {
+  const a = addr.trim();
+  if (!/^0x[a-fA-F0-9]{40}$/.test(a)) return a;
+  return `${a.slice(0, 6)}…${a.slice(-4)}`;
+}
+
+function displayLabel(fc: FarcasterUserLite | null, fallback: string) {
+  if (fc?.username) return `@${fc.username}`;
+  if (fc?.display_name) return fc.display_name;
+  return fallback;
 }
 
 export default function HomeLatestWeekLeaderboardClient({ rows }: Props) {
@@ -52,6 +71,39 @@ export default function HomeLatestWeekLeaderboardClient({ rows }: Props) {
     return filtered.slice(start, start + pageSize);
   }, [filtered, safePage]);
 
+  const [fcByAddress, setFcByAddress] = useState<Record<string, FarcasterUserLite | null>>({});
+
+  useEffect(() => {
+    const addresses = pageRows
+      .map((r) => r.address.toLowerCase())
+      .filter((a) => /^0x[a-f0-9]{40}$/.test(a));
+
+    const missing = addresses.filter((a) => !(a in fcByAddress));
+    if (missing.length === 0) return;
+
+    const controller = new AbortController();
+
+    async function run() {
+      try {
+        const qs = encodeURIComponent(missing.join(','));
+        const res = await fetch(`/api/farcaster-users?addresses=${qs}`, { signal: controller.signal });
+        if (!res.ok) return;
+
+        const json = (await res.json()) as { users?: Record<string, FarcasterUserLite | null> };
+        const incoming = json.users || {};
+
+        setFcByAddress((prev) => ({ ...prev, ...incoming }));
+      } catch {
+        // ignore
+      }
+    }
+
+    void run();
+
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageRows]);
+
   function goPrev() {
     setPage((p) => Math.max(1, p - 1));
   }
@@ -75,10 +127,9 @@ export default function HomeLatestWeekLeaderboardClient({ rows }: Props) {
           <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: 54 }} />
-              <col style={{ width: 150 }} />
+              <col style={{ width: 160 }} />
               <col style={{ width: 92 }} />
               <col style={{ width: 92 }} />
-              {/* extra columns still exist but will require scroll */}
               <col style={{ width: 98 }} />
               <col style={{ width: 96 }} />
             </colgroup>
@@ -95,35 +146,50 @@ export default function HomeLatestWeekLeaderboardClient({ rows }: Props) {
             </thead>
 
             <tbody>
-              {pageRows.map((r) => (
-                <tr key={r.address} style={{ borderTop: '1px solid rgba(10,10,10,0.08)' }}>
-                  <td style={tdStickyRank}>{r.rank}</td>
+              {pageRows.map((r) => {
+                const key = r.address.toLowerCase();
+                const fc = fcByAddress[key] ?? null;
 
-                  <td style={tdStickyUser}>
-                    <a
-                      href={'/find/' + r.address}
-                      style={{
-                        color: '#0A0A0A',
-                        textDecoration: 'none',
-                        fontWeight: 900,
-                        display: 'block',
-                        textAlign: 'center',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                      title={r.user_display || r.address}
-                    >
-                      {r.user_display || r.address}
-                    </a>
-                  </td>
+                const fallback = r.user_display || shortAddress(r.address);
+                const label = displayLabel(fc, fallback);
 
-                  <td style={tdCenter}>${formatUSDC(r.this_week_usdc)}</td>
-                  <td style={tdCenter}>${formatUSDC(r.previous_week_usdc)}</td>
-                  <td style={tdCenter}>{formatPct(r.pct_change ?? null)}</td>
-                  <td style={tdCenter}>${formatUSDC(r.all_time_usdc)}</td>
-                </tr>
-              ))}
+                return (
+                  <tr key={r.address} style={{ borderTop: '1px solid rgba(10,10,10,0.08)' }}>
+                    <td style={tdStickyRank}>{r.rank}</td>
+
+                    <td style={tdStickyUser}>
+                      <a
+                        href={'/find/' + r.address}
+                        style={userLink}
+                        title={label}
+                      >
+                        <span style={userCell}>
+                          {fc?.pfp_url ? (
+                            <img
+                              src={fc.pfp_url}
+                              alt=""
+                              style={avatarImg}
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).style.display = 'none';
+                              }}
+                            />
+                          ) : (
+                            <span style={avatarFallback} />
+                          )}
+                          <span style={userText}>{label}</span>
+                        </span>
+                      </a>
+                    </td>
+
+                    <td style={tdCenter}>${formatUSDC(r.this_week_usdc)}</td>
+                    <td style={tdCenter}>${formatUSDC(r.previous_week_usdc)}</td>
+                    <td style={tdCenter}>{formatPct(r.pct_change ?? null)}</td>
+                    <td style={tdCenter}>${formatUSDC(r.all_time_usdc)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -184,7 +250,7 @@ const tableWrap: React.CSSProperties = {
 };
 
 const thBase: React.CSSProperties = {
-  padding: '8px 6px', // tighter
+  padding: '8px 6px',
   whiteSpace: 'nowrap',
   textAlign: 'center',
   fontWeight: 900,
@@ -209,7 +275,7 @@ const thStickyUser: React.CSSProperties = {
 };
 
 const tdBase: React.CSSProperties = {
-  padding: '8px 6px', // tighter
+  padding: '8px 6px',
   whiteSpace: 'nowrap',
   fontSize: 13,
   background: '#FFFFFF',
@@ -246,4 +312,50 @@ const controlsRow: React.CSSProperties = {
   alignItems: 'center',
   marginTop: 12,
   flexWrap: 'wrap',
+};
+
+const userLink: React.CSSProperties = {
+  color: '#0A0A0A',
+  textDecoration: 'none',
+  fontWeight: 900,
+  display: 'block',
+  textAlign: 'center',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const userCell: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  maxWidth: '100%',
+};
+
+const userText: React.CSSProperties = {
+  display: 'inline-block',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  maxWidth: 120,
+};
+
+const avatarImg: React.CSSProperties = {
+  width: 20,
+  height: 20,
+  borderRadius: 999,
+  objectFit: 'cover',
+  border: '1px solid rgba(10,10,10,0.12)',
+  background: '#FFFFFF',
+  flex: '0 0 auto',
+};
+
+const avatarFallback: React.CSSProperties = {
+  width: 20,
+  height: 20,
+  borderRadius: 999,
+  background: '#FFFFFF',
+  border: '1px solid rgba(10,10,10,0.12)',
+  flex: '0 0 auto',
 };

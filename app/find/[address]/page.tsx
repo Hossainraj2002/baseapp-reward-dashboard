@@ -1,5 +1,5 @@
 import FrameReady from '@/components/FrameReady';
-import ProfileView from '@/components/ProfileView';
+import FindAddressProfileView from '@/components/FindAddressProfileView';
 import { buildProfilePayload } from '@/lib/profilePayload';
 import { getAddress } from 'viem';
 import Link from 'next/link';
@@ -42,7 +42,7 @@ export default async function FindAddressPage({
   return (
     <main style={{ maxWidth: 420, margin: '0 auto', padding: 16, paddingBottom: 28 }}>
       <FrameReady />
-      <ProfileView data={payload} />
+      <FindAddressProfileView data={payload} />
     </main>
   );
 }

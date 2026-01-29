@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "farcaster:map": "node scripts/farcaster-map.mjs"
+    "farcaster:map": "node scripts/farcaster-map.mjs",
+    "users:index": "node scripts/users-index.mjs"
   },
   "dependencies": {
     "@coinbase/onchainkit": "latest",
