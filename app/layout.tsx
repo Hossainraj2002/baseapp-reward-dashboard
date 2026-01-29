@@ -23,8 +23,8 @@ const MINIAPP_EMBED = JSON.stringify({
 export const metadata: Metadata = {
   title: 'Baseapp Reward Dashboard',
   description: 'Weekly creator rewards dashboard for explore more details.',
+  // Keep FC metadata here (fine). We'll hardcode base:app_id in <head> below.
   other: {
-    'base:app_id': '6970f9825f24b57cc50d3331',
     'fc:miniapp': MINIAPP_EMBED,
     'fc:frame': MINIAPP_EMBED,
   },
@@ -33,10 +33,14 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
+      <head>
+        {/* Hardcoded for Base.dev verification reliability */}
+        <meta name="base:app_id" content="6970f9825f24b57cc50d3331" />
+      </head>
+
       <body>
         {/* Must be first; must NOT depend on any provider */}
         <FrameReady />
-
         <RootProvider>{children}</RootProvider>
       </body>
     </html>
