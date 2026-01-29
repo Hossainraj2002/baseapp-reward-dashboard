@@ -41,11 +41,4 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </body>
     </html>
   );
-}        {/* Must be first; must NOT depend on any provider */}
-        <FrameReady />
-
-        <RootProvider>{children}</RootProvider>
-      </body>
-    </html>
-  );
 }
