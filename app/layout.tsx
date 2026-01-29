@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import '@coinbase/onchainkit/styles.css';
 import RootProvider from './rootProvider';
 import FrameReady from '@/components/FrameReady';
 import './globals.css';
@@ -25,6 +24,7 @@ export const metadata: Metadata = {
   title: 'Baseapp Reward Dashboard',
   description: 'Weekly creator rewards dashboard for explore more details.',
   other: {
+    'base:app_id': '6970f9825f24b57cc50d3331',
     'fc:miniapp': MINIAPP_EMBED,
     'fc:frame': MINIAPP_EMBED,
   },
@@ -35,6 +35,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         {/* Must be first; must NOT depend on any provider */}
+        <FrameReady />
+
+        <RootProvider>{children}</RootProvider>
+      </body>
+    </html>
+  );
+}        {/* Must be first; must NOT depend on any provider */}
         <FrameReady />
 
         <RootProvider>{children}</RootProvider>
