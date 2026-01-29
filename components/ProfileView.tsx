@@ -1,3 +1,5 @@
+'use client';
+
 import React from 'react';
 import Link from 'next/link';
 import CopyButton from '@/components/CopyButton';
@@ -115,16 +117,8 @@ export default function ProfileView({
       </div>
 
       <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
-        <StatCard
-          title="Latest week"
-          value={'$' + formatUSDC(data.reward_summary.latest_week_usdc)}
-          subtitle={data.reward_summary.latest_week_label}
-        />
-        <StatCard
-          title="Previous week"
-          value={'$' + formatUSDC(data.reward_summary.previous_week_usdc)}
-          subtitle={data.reward_summary.previous_week_label || '—'}
-        />
+        <StatCard title="Latest week" value={'$' + formatUSDC(data.reward_summary.latest_week_usdc)} subtitle={data.reward_summary.latest_week_label} />
+        <StatCard title="Previous week" value={'$' + formatUSDC(data.reward_summary.previous_week_usdc)} subtitle={data.reward_summary.previous_week_label || '—'} />
       </div>
 
       <div className="card card-pad" style={{ marginBottom: 12 }}>
@@ -133,14 +127,7 @@ export default function ProfileView({
       </div>
 
       <div className="card" style={{ overflow: 'hidden', marginBottom: 12 }}>
-        <div
-          style={{
-            padding: 12,
-            fontSize: 13,
-            fontWeight: 900,
-            borderBottom: '1px solid rgba(255,255,255,0.08)',
-          }}
-        >
+        <div style={{ padding: 12, fontSize: 13, fontWeight: 900, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
           Reward history
         </div>
 
@@ -151,16 +138,7 @@ export default function ProfileView({
         ) : (
           <div>
             {data.reward_history.map((r) => (
-              <div
-                key={r.week_start_utc}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: 10,
-                  padding: 12,
-                  borderTop: '1px solid rgba(255,255,255,0.06)',
-                }}
-              >
+              <div key={r.week_start_utc} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: 12, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                 <div style={{ fontSize: 13, fontWeight: 800 }}>{r.week_label}</div>
                 <div style={{ fontSize: 13, fontWeight: 900 }}>${formatUSDC(r.usdc)}</div>
               </div>
@@ -197,11 +175,7 @@ function StatCard({ title, value, subtitle }: { title: string; value: string; su
         {title}
       </div>
       <div style={{ fontSize: 16, fontWeight: 900 }}>{value}</div>
-      {subtitle ? (
-        <div className="subtle" style={{ marginTop: 4 }}>
-          {subtitle}
-        </div>
-      ) : null}
+      {subtitle ? <div className="subtle" style={{ marginTop: 4 }}>{subtitle}</div> : null}
     </div>
   );
 }
