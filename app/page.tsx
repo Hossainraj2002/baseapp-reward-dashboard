@@ -1,14 +1,6 @@
-import type { Metadata } from 'next';
-
 import CopyButton from '@/components/CopyButton';
 import HomeLatestWeekLeaderboardClient from '@/components/HomeLatestWeekLeaderboardClient';
 import { getOverview, getWeeklyLatestLeaderboard } from '@/lib/dataFiles';
-
-export const metadata: Metadata = {
-  other: {
-    'base:app_id': '6970f9825f24b57cc50d3331',
-  },
-};
 
 const SUPPORT_CREATOR_ADDRESS = '0xd4a1D777e2882487d47c96bc23A47CeaB4f4f18A';
 
