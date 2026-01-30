@@ -11,7 +11,17 @@ const SUPPORT_CREATOR_ADDRESS = '0xd4a1D777e2882487d47c96bc23A47CeaB4f4f18A';
 type ProfileApiResponse =
   | {
       address: string;
-      farcaster: null | { fid: number; username: string; pfp_url: string | null };
+      farcaster: null | {
+        fid: number;
+        username: string;
+        display_name: string | null;
+        pfp_url: string | null;
+        bio_text: string | null;
+        follower_count: number | null;
+        following_count: number | null;
+        score: number | null;
+        neynar_user_score: number | null;
+      };
       reward_summary: {
         all_time_usdc: number;
         total_weeks_earned: number;
@@ -61,6 +71,14 @@ type WebShareNavigator = Navigator & {
   share?: (data: { text?: string; url?: string; files?: File[]; title?: string }) => Promise<void>;
 };
 
+type MiniAppActions = {
+  ready: (opts?: { disableNativeGestures?: boolean }) => Promise<void>;
+  openUrl?: (args: { url: string }) => Promise<void>;
+  composeCast?: (args: { text: string; embeds?: string[] }) => Promise<void>;
+};
+
+const actions = sdk.actions as unknown as MiniAppActions;
+
 function isEvmAddress(s: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(s);
 }
@@ -71,6 +89,33 @@ function formatUSDC(n: number) {
 
 function shortAddress(addr: string) {
   return addr.slice(0, 6) + '...' + addr.slice(-4);
+}
+
+function safeUsername(u: string | null | undefined): string | null {
+  if (!u) return null;
+  const t = u.trim();
+  if (!t) return null;
+  return t.startsWith('@') ? t.slice(1) : t;
+}
+
+function buildBaseAppProfileUrl(username: string | null, address: string): string {
+  const u = safeUsername(username);
+  if (u && u.toLowerCase().endsWith('.base.eth')) {
+    const handle = u.split('.')[0];
+    if (handle && handle.length > 0) return `https://base.app/profile/${handle}`;
+  }
+  return `https://base.app/profile/${address}`;
+}
+
+function formatDateOnlyFromIso(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return iso;
+  return d.toISOString().slice(0, 10);
+}
+
+function formatDateOnlyFromDay(day: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(day)) return day;
+  return day;
 }
 
 function pickAddressFromMiniKitContext(ctx: unknown): string | null {
@@ -107,12 +152,27 @@ function pickFidFromMiniKitContext(ctx: unknown): number | null {
   return null;
 }
 
+async function openUrl(url: string) {
+  try {
+    if (typeof actions.openUrl === 'function') {
+      await actions.openUrl({ url });
+      return;
+    }
+  } catch {
+    // fallback below
+  }
+
+  try {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } catch {
+    // ignore
+  }
+}
 
 export default function ProfileDashboardClient() {
   const { context } = useMiniKit();
   const { address: wagmiAddress, isConnected } = useAccount();
 
-  // SDK context (more reliable in miniapps)
   const [sdkFid, setSdkFid] = useState<number | null>(null);
 
   useEffect(() => {
@@ -143,8 +203,11 @@ export default function ProfileDashboardClient() {
   const [profileLoading, setProfileLoading] = useState(false);
   const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
 
-  const [socialLoading, setSocialLoading] = useState(false);
-  const [social, setSocial] = useState<SocialApiResponse | null>(null);
+  const [socialCurrentLoading, setSocialCurrentLoading] = useState(false);
+  const [socialCurrent, setSocialCurrent] = useState<SocialApiResponse | null>(null);
+
+  const [socialLastLoading, setSocialLastLoading] = useState(false);
+  const [socialLast, setSocialLast] = useState<SocialApiResponse | null>(null);
 
   async function loadProfile(addr: string) {
     setProfileLoading(true);
@@ -160,53 +223,57 @@ export default function ProfileDashboardClient() {
     }
   }
 
-  async function loadSocial(fidNum: number, startUtc: string, endUtc: string) {
-    setSocialLoading(true);
-    setSocial(null);
+  async function loadSocial(
+    fidNum: number,
+    startIso: string,
+    endIso: string,
+    setLoading: (v: boolean) => void,
+    setValue: (v: SocialApiResponse | null) => void
+  ) {
+    setLoading(true);
+    setValue(null);
     try {
       const qs = new URLSearchParams({
         fid: String(fidNum),
-        start: startUtc,
-        end: endUtc,
+        start: startIso,
+        end: endIso,
       });
       const res = await fetch(`/api/social?${qs.toString()}`, { cache: 'no-store' });
       const json = (await res.json()) as SocialApiResponse;
-      setSocial(json);
+      setValue(json);
     } catch {
-      setSocial({ error: 'Failed to load social data' });
+      setValue({ error: 'Failed to load social data' });
     } finally {
-      setSocialLoading(false);
+      setLoading(false);
     }
   }
 
-  // Auto load profile when we have an address
   useEffect(() => {
     if (addressToQuery) loadProfile(addressToQuery);
   }, [addressToQuery]);
 
-  // IMPORTANT FIX:
-  // Your social window should be [previous_week_start .. latest_week_start + 1 day)
-  // Otherwise you often exclude the latest-day activity and get zeros.
-  // Auto load social after profile is ready (latest reward week window = 7 days)
-useEffect(() => {
-  if (!fid) return;
-  if (!profile || 'error' in profile) return;
+  useEffect(() => {
+    if (!fid) return;
+    if (!profile || 'error' in profile) return;
 
-  const endDay = profile.reward_summary.latest_week_start_utc; // "YYYY-MM-DD"
-  if (!endDay) return;
+    const latestDay = profile.reward_summary.latest_week_start_utc;
+    if (!latestDay) return;
 
-  const endDate = new Date(`${endDay}T00:00:00.000Z`);
-  if (!Number.isFinite(endDate.getTime())) return;
+    const latestStart = new Date(`${latestDay}T00:00:00.000Z`);
+    if (!Number.isFinite(latestStart.getTime())) return;
 
-  const startDate = new Date(endDate.getTime());
-  startDate.setUTCDate(startDate.getUTCDate() - 7);
+    const lastEnd = new Date(latestStart.getTime());
+    const lastStart = new Date(latestStart.getTime());
+    lastStart.setUTCDate(lastStart.getUTCDate() - 7);
 
-  const startIso = startDate.toISOString(); // includes time
-  const endIso = endDate.toISOString();
+    const currentStartIso = latestStart.toISOString();
+    const currentEndIso = new Date().toISOString();
+    const lastStartIso = lastStart.toISOString();
+    const lastEndIso = lastEnd.toISOString();
 
-  loadSocial(fid, startIso, endIso);
-}, [fid, profile]);
-
+    loadSocial(fid, currentStartIso, currentEndIso, setSocialCurrentLoading, setSocialCurrent);
+    loadSocial(fid, lastStartIso, lastEndIso, setSocialLastLoading, setSocialLast);
+  }, [fid, profile]);
 
   const finalAddress = useMemo(() => {
     if (profile && !('error' in profile)) return profile.address;
@@ -215,46 +282,57 @@ useEffect(() => {
     return isEvmAddress(m) ? m : null;
   }, [profile, addressToQuery, manualAddress]);
 
-  const headerName =
-    social && !('error' in social) ? social.user.display_name || social.user.username || 'Profile' : 'Profile';
+  const farcaster = profile && !('error' in profile) ? profile.farcaster : null;
 
-  const headerUsername =
-    social && !('error' in social) ? (social.user.username ? `@${social.user.username}` : null) : null;
+  const displayName =
+    farcaster?.display_name?.trim() || farcaster?.username?.trim() || (finalAddress ? shortAddress(finalAddress) : 'Profile');
 
-  const headerPfp = social && !('error' in social) ? social.user.pfp_url : null;
+  const username = farcaster?.username ? `@${safeUsername(farcaster.username) ?? farcaster.username}` : null;
+  const pfp = farcaster?.pfp_url || null;
+  const bio = farcaster?.bio_text || null;
+
+  const scoreValue = farcaster?.score ?? farcaster?.neynar_user_score ?? null;
+
+  const following = farcaster?.following_count ?? null;
+  const followers = farcaster?.follower_count ?? null;
+  const fidForDisplay = farcaster?.fid ?? null;
+
+  const visitBaseProfileUrl = useMemo(() => {
+    if (!finalAddress) return null;
+    const u = safeUsername(farcaster?.username);
+    return buildBaseAppProfileUrl(u, finalAddress);
+  }, [farcaster?.username, finalAddress]);
 
   const showChangeAddressButton =
     (!profileLoading && !!finalAddress) || (!profileLoading && (!addressToQuery || (profile && 'error' in profile)));
 
+  const latestWeekStartDay = profile && !('error' in profile) ? profile.reward_summary.latest_week_start_utc : null;
+
+  const subtitleCurrent = useMemo(() => {
+    if (!latestWeekStartDay) return null;
+    const start = formatDateOnlyFromDay(latestWeekStartDay);
+    return `[${start} → now]`;
+  }, [latestWeekStartDay]);
+
+  const subtitleLast = useMemo(() => {
+    if (!latestWeekStartDay) return null;
+    const end = new Date(`${latestWeekStartDay}T00:00:00.000Z`);
+    if (!Number.isFinite(end.getTime())) return null;
+    const start = new Date(end.getTime());
+    start.setUTCDate(start.getUTCDate() - 7);
+    return `[${formatDateOnlyFromIso(start.toISOString())} → ${formatDateOnlyFromDay(latestWeekStartDay)}]`;
+  }, [latestWeekStartDay]);
+
+  const showSocialCreditMessage = (resp: SocialApiResponse | null): boolean => {
+    if (!resp) return false;
+    if (!('error' in resp)) return false;
+    return true;
+  };
+
   return (
     <div className="page" style={{ paddingBottom: 28 }}>
-      {/* Header (NO Find button) */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 14,
-              overflow: 'hidden',
-              background: '#E5E7EB',
-              border: '1px solid rgba(0,0,255,0.25)',
-              flexShrink: 0,
-            }}
-          >
-            {headerPfp ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={headerPfp} alt="pfp" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            ) : null}
-          </div>
-
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 18, fontWeight: 900, color: '#0A0A0A', lineHeight: 1.2 }}>{headerName}</div>
-            <div className="subtle" style={{ marginTop: 2 }}>
-              {headerUsername ? headerUsername : finalAddress ? shortAddress(finalAddress) : 'Wallet not detected'}
-            </div>
-          </div>
-        </div>
+        <div style={{ fontSize: 18, fontWeight: 900, color: '#0000FF' }}>Profile</div>
 
         {showChangeAddressButton ? (
           <button className="btn" onClick={() => setShowManual((v) => !v)}>
@@ -263,7 +341,6 @@ useEffect(() => {
         ) : null}
       </div>
 
-      {/* Collapsed wallet/address panel */}
       {showManual ? (
         <div className="card card-pad" style={{ marginTop: 12, border: '2px solid #0000FF' }}>
           <div style={{ fontWeight: 900, marginBottom: 8 }}>Wallet address</div>
@@ -310,28 +387,15 @@ useEffect(() => {
         </div>
       ) : null}
 
-      {/* Followers / Following */}
-      <div style={{ marginTop: 10 }}>
-        {socialLoading ? (
-          <div className="subtle">Loading social…</div>
-        ) : social && !('error' in social) ? (
-          <div style={{ display: 'flex', gap: 10 }}>
-            <MiniStat title="Followers" value={social.user.follower_count.toLocaleString()} />
-            <MiniStat title="Following" value={social.user.following_count.toLocaleString()} />
-          </div>
-        ) : (
-          <div className="subtle">Social data not available{fid ? '' : ' (FID not detected)'}.</div>
-        )}
-      </div>
-
-      {/* Onchain section */}
-      <div style={{ marginTop: 14 }}>
+      <div style={{ marginTop: 12 }}>
         {profileLoading ? (
           <div className="card card-pad">Loading profile…</div>
         ) : profile && 'error' in profile ? (
           <div className="card card-pad" style={{ border: '2px solid #0000FF' }}>
             <div style={{ fontWeight: 900 }}>Failed to load profile</div>
-            <div className="subtle" style={{ marginTop: 6 }}>{profile.error}</div>
+            <div className="subtle" style={{ marginTop: 6 }}>
+              {profile.error}
+            </div>
 
             {!addressToQuery ? (
               <div style={{ marginTop: 12 }}>
@@ -343,175 +407,70 @@ useEffect(() => {
           </div>
         ) : profile && !('error' in profile) ? (
           <>
-            <SectionTitle title="Onchain rewards" subtitle="Your Base app weekly reward stats" />
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <KpiCardDeep title="All-time rewards" value={`$${formatUSDC(profile.reward_summary.all_time_usdc)}`} />
-              <KpiCardDeep title="Earning weeks" value={profile.reward_summary.total_weeks_earned.toLocaleString()} />
-              <KpiCardDeep
-                title={profile.reward_summary.latest_week_label}
-                value={`$${formatUSDC(profile.reward_summary.latest_week_usdc)}`}
-                subtitle="Current week"
-              />
-              <KpiCardDeep
-                title={profile.reward_summary.previous_week_label || 'Previous week'}
-                value={`$${formatUSDC(profile.reward_summary.previous_week_usdc)}`}
-                subtitle={
-                  profile.reward_summary.pct_change == null ? 'Change: —' : `Change: ${profile.reward_summary.pct_change}%`
-                }
-              />
-            </div>
-
-            {/* Reward history grid */}
-            <div style={{ marginTop: 14 }}>
-              <SectionTitle title="Weeks you earned rewards" subtitle="Only weeks with rewards are shown" />
-
-              {profile.reward_history.filter((x) => x.usdc > 0).length === 0 ? (
-                <div className="card card-pad">
-                  <div className="subtle">No reward history found for this address.</div>
-                </div>
-              ) : (
+            <div className="card card-pad" style={{ padding: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <div
                   style={{
-                    border: '1px solid rgba(10,10,10,0.12)',
-                    borderRadius: 14,
-                    background: '#FFFFFF',
-                    padding: 10,
+                    width: 56,
+                    height: 56,
+                    borderRadius: 18,
+                    overflow: 'hidden',
+                    background: '#E5E7EB',
+                    border: '1px solid rgba(0,0,255,0.25)',
+                    flexShrink: 0,
                   }}
                 >
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-                    {profile.reward_history
-                      .filter((x) => x.usdc > 0)
-                      .map((w) => (
-                        <div
-                          key={w.week_start_utc}
-                          style={{
-                            border: '1px solid rgba(10,10,10,0.08)',
-                            borderRadius: 12,
-                            padding: 10,
-                            background: '#FFFFFF',
-                          }}
-                        >
-                          <div style={{ fontSize: 12, fontWeight: 900, color: '#0000FF' }}>{w.week_label}</div>
-                          <div style={{ marginTop: 6, fontWeight: 900 }}>${formatUSDC(w.usdc)}</div>
-                        </div>
-                      ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Social engagement */}
-            <div style={{ marginTop: 14 }}>
-              <SectionTitle title="Social engagement" subtitle="Latest reward week window" />
-
-              {socialLoading ? (
-                <div className="card card-pad">Loading social…</div>
-              ) : social && 'error' in social ? (
-                <div className="card card-pad" style={{ border: '2px solid #0000FF' }}>
-                  <div style={{ fontWeight: 900 }}>Social not available</div>
-                  <div className="subtle" style={{ marginTop: 6 }}>{social.error}</div>
-                </div>
-              ) : social && !('error' in social) ? (
-                <>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    <KpiCardDeep title="Casts" value={social.engagement.casts.toLocaleString()} />
-                    <KpiCardDeep title="Recasts" value={social.engagement.recasts.toLocaleString()} />
-                    <KpiCardDeep title="Likes" value={social.engagement.likes.toLocaleString()} />
-                    <KpiCardDeep title="Replies" value={social.engagement.replies.toLocaleString()} />
-                  </div>
-
-                  {/* Top posts */}
-                  <div style={{ marginTop: 14 }}>
-                    <SectionTitle title="Top posts this week" subtitle="Top 7 posts in latest reward week window" />
-
-                    {social.top_posts.length === 0 ? (
-                      <div className="card card-pad">
-                        <div className="subtle">No posts found in this timeframe.</div>
-                      </div>
-                    ) : (
-                      <div style={{ display: 'grid', gap: 10 }}>
-                        {social.top_posts.map((p) => (
-                          <div key={p.hash} className="card card-pad">
-                            <div style={{ fontSize: 13, fontWeight: 900, color: '#0A0A0A' }}>
-                              {p.text.length > 220 ? p.text.slice(0, 220) + '…' : p.text}
-                            </div>
-
-                            <div className="subtle" style={{ marginTop: 8 }}>
-                              ❤️ {p.likes} · 🔁 {p.recasts} · 💬 {p.replies}
-                            </div>
-
-                            {p.url ? (
-                              <div style={{ marginTop: 10 }}>
-                                <a className="btn" href={p.url} target="_blank" rel="noreferrer">
-                                  Open post
-                                </a>
-                              </div>
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Share section */}
-                  <div style={{ marginTop: 14 }}>
-                    <SectionTitle title="Share your stats" subtitle="Generate a shareable card + copy text" />
-                    <ShareCard
-                      pfpUrl={headerPfp || null}
-                      displayName={headerName}
-                      username={headerUsername || ''}
-                      onchain={{
-                        allTime: profile.reward_summary.all_time_usdc,
-                        weeks: profile.reward_summary.total_weeks_earned,
-                        latestLabel: profile.reward_summary.latest_week_label,
-                        latestUsdc: profile.reward_summary.latest_week_usdc,
-                        casts: social.engagement.casts,
-                        likes: social.engagement.likes,
-                        recasts: social.engagement.recasts,
-                        replies: social.engagement.replies,
-                      }}
-                    />
-                  </div>
-                </>
-              ) : (
-                <div className="card card-pad">
-                  <div className="subtle">Social will appear when FID is available.</div>
-                </div>
-              )}
-            </div>
-
-            {/* Credits + Support */}
-            <div style={{ marginTop: 16 }}>
-              <div className="card card-pad">
-                <div style={{ fontSize: 13, color: '#6B7280', marginBottom: 10 }}>
-                  created by 🅰️kbar |{' '}
-                  <a href="https://x.com/akbarX402" target="_blank" rel="noreferrer">
-                    x
-                  </a>{' '}
-                  |{' '}
-                  <a href="https://base.app/profile/akbaronchain" target="_blank" rel="noreferrer">
-                    baseapp
-                  </a>
+                  {pfp ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={pfp} alt="pfp" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  ) : null}
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div
-                    style={{
-                      flex: 1,
-                      fontSize: 13,
-                      fontWeight: 900,
-                      color: '#0A0A0A',
-                      wordBreak: 'break-all',
-                    }}
-                  >
-                    {SUPPORT_CREATOR_ADDRESS}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 18, fontWeight: 900, color: '#0A0A0A', lineHeight: 1.2 }}>
+                    {displayName}
                   </div>
-
-                  <CopyButton value={SUPPORT_CREATOR_ADDRESS} mode="icon" />
+                  <div style={{ marginTop: 4, fontWeight: 900, color: '#0000FF' }}>
+                    {username ? username : shortAddress(profile.address)}
+                  </div>
                 </div>
+
+                <CopyButton value={profile.address} mode="icon" />
+              </div>
+
+              {bio ? (
+                <div
+                  style={{
+                    marginTop: 10,
+                    color: '#6B7280',
+                    fontWeight: 700,
+                    fontSize: 13,
+                    lineHeight: 1.35,
+                  }}
+                >
+                  {bio}
+                </div>
+              ) : null}
+
+              <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <Chip label="Score" value={scoreValue == null ? '—' : scoreValue.toFixed(2)} />
+                <Chip label="FID" value={fidForDisplay == null ? '—' : fidForDisplay.toLocaleString()} />
+                <Chip label="Following" value={following == null ? '—' : following.toLocaleString()} />
+                <Chip label="Followers" value={followers == null ? '—' : followers.toLocaleString()} />
               </div>
             </div>
+
+            {visitBaseProfileUrl ? (
+              <div style={{ marginTop: 10 }}>
+                <button
+                  className="btn"
+                  style={{ width: '100%', height: 46, borderRadius: 16, fontSize: 16, fontWeight: 900 }}
+                  onClick={() => void openUrl(visitBaseProfileUrl)}
+                >
+                  Visit user profile on Baseapp
+                </button>
+              </div>
+            ) : null}
           </>
         ) : (
           <div className="card card-pad">
@@ -526,25 +485,264 @@ useEffect(() => {
           </div>
         )}
       </div>
+
+      {profile && !('error' in profile) ? (
+        <div style={{ marginTop: 14 }}>
+          <SectionTitle title="Onchain rewards" subtitle="Your Base app weekly reward stats" />
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <KpiCardDeep title="All-time rewards" value={`$${formatUSDC(profile.reward_summary.all_time_usdc)}`} />
+            <KpiCardDeep title="Earning weeks" value={profile.reward_summary.total_weeks_earned.toLocaleString()} />
+            <KpiCardDeep
+              title={profile.reward_summary.latest_week_label}
+              value={`$${formatUSDC(profile.reward_summary.latest_week_usdc)}`}
+              subtitle="Current week"
+            />
+            <KpiCardDeep
+              title={profile.reward_summary.previous_week_label || 'Previous week'}
+              value={`$${formatUSDC(profile.reward_summary.previous_week_usdc)}`}
+              subtitle={profile.reward_summary.pct_change == null ? 'Change: —' : `Change: ${profile.reward_summary.pct_change}%`}
+            />
+          </div>
+
+          <div style={{ marginTop: 14 }}>
+            <SectionTitle title="Weekly reward wins" subtitle="Only weeks with rewards are shown" />
+
+            {profile.reward_history.filter((x) => x.usdc > 0).length === 0 ? (
+              <div className="card card-pad">
+                <div className="subtle">No reward history found for this address.</div>
+              </div>
+            ) : (
+              <div
+                style={{
+                  border: '1px solid rgba(10,10,10,0.12)',
+                  borderRadius: 14,
+                  background: '#FFFFFF',
+                  padding: 10,
+                }}
+              >
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                  {profile.reward_history
+                    .filter((x) => x.usdc > 0)
+                    .map((w) => (
+                      <div
+                        key={w.week_start_utc}
+                        style={{
+                          border: '1px solid rgba(10,10,10,0.08)',
+                          borderRadius: 12,
+                          padding: 10,
+                          background: '#FFFFFF',
+                        }}
+                      >
+                        <div style={{ fontSize: 12, fontWeight: 900, color: '#0000FF' }}>{w.week_label}</div>
+                        <div style={{ marginTop: 6, fontWeight: 900 }}>${formatUSDC(w.usdc)}</div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {profile && !('error' in profile) ? (
+        <div style={{ marginTop: 14 }}>
+          <SectionTitle title="Social" subtitle="Engagement on your Farcaster posts" />
+
+          {!fid ? (
+            <div className="card card-pad">
+              <div className="subtle">Social activity will appear when your FID is available.</div>
+            </div>
+          ) : null}
+
+          {fid ? (
+            <>
+              <div style={{ marginTop: 10 }}>
+                <SectionTitle title="Current social activity" subtitle={subtitleCurrent ?? undefined} />
+                <SocialBlock loading={socialCurrentLoading} data={socialCurrent} onOpenPost={(url) => void openUrl(url)} />
+              </div>
+
+              <div style={{ marginTop: 14 }}>
+                <SectionTitle title="Social activity of last reward window" subtitle={subtitleLast ?? undefined} />
+                <SocialBlock loading={socialLastLoading} data={socialLast} onOpenPost={(url) => void openUrl(url)} />
+              </div>
+
+              {(showSocialCreditMessage(socialCurrent) || showSocialCreditMessage(socialLast)) &&
+              !socialCurrentLoading &&
+              !socialLastLoading ? (
+                <div className="card card-pad" style={{ marginTop: 14, border: '1px solid rgba(0,0,255,0.25)' }}>
+                  <div style={{ fontWeight: 900, color: '#0A0A0A' }}>Social stats temporarily unavailable</div>
+                  <div className="subtle" style={{ marginTop: 6 }}>
+                    I’ve run out of Neynar API credits, so I can’t load social activity right now. If I receive support for API costs
+                    from the Base team, this section will be enabled again.
+                  </div>
+                </div>
+              ) : null}
+
+              <div style={{ marginTop: 14 }}>
+                <SectionTitle title="Share your stats" subtitle="Generate a shareable card + post text" />
+                <ShareCard
+                  address={profile.address}
+                  pfpUrl={pfp}
+                  displayName={displayName}
+                  username={safeUsername(farcaster?.username) ? `@${safeUsername(farcaster?.username)}` : ''}
+                  onchain={{
+                    allTime: profile.reward_summary.all_time_usdc,
+                    weeks: profile.reward_summary.total_weeks_earned,
+                    latestLabel: profile.reward_summary.latest_week_label,
+                    latestUsdc: profile.reward_summary.latest_week_usdc,
+                  }}
+                  social={
+                    socialCurrent && !('error' in socialCurrent)
+                      ? {
+                          casts: socialCurrent.engagement.casts,
+                          likes: socialCurrent.engagement.likes,
+                          recasts: socialCurrent.engagement.recasts,
+                          replies: socialCurrent.engagement.replies,
+                        }
+                      : null
+                  }
+                />
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div style={{ marginTop: 16 }}>
+        <div className="card card-pad">
+          <div style={{ fontSize: 13, color: '#6B7280', marginBottom: 10 }}>
+            created by 🅰️kbar |{' '}
+            <a href="https://x.com/akbarX402" target="_blank" rel="noreferrer">
+              x
+            </a>{' '}
+            |{' '}
+            <a href="https://base.app/profile/akbaronchain" target="_blank" rel="noreferrer">
+              baseapp
+            </a>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ flex: 1, fontSize: 13, fontWeight: 900, color: '#0A0A0A', wordBreak: 'break-all' }}>
+              {SUPPORT_CREATOR_ADDRESS}
+            </div>
+
+            <CopyButton value={SUPPORT_CREATOR_ADDRESS} mode="icon" />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function MiniStat({ title, value }: { title: string; value: string }) {
+function Chip({ label, value }: { label: string; value: string }) {
   return (
     <div
       style={{
-        flex: 1,
-        border: '1px solid rgba(10,10,10,0.12)',
-        borderRadius: 14,
-        padding: 10,
-        background: '#FFFFFF',
+        height: 26,
+        borderRadius: 999,
+        border: '1px solid rgba(0,0,255,0.25)',
+        background: 'rgba(165,210,255,0.28)',
+        display: 'flex',
+        alignItems: 'center',
+        padding: '0 10px',
+        gap: 8,
+        overflow: 'hidden',
       }}
     >
-      <div className="subtle" style={{ marginBottom: 4 }}>
-        {title}
+      <div style={{ fontWeight: 900, fontSize: 12, color: '#6B7280', whiteSpace: 'nowrap' }}>{label}:</div>
+      <div style={{ fontWeight: 900, fontSize: 12, color: '#0A0A0A', whiteSpace: 'nowrap' }}>{value}</div>
+    </div>
+  );
+}
+
+function SocialBlock(props: {
+  loading: boolean;
+  data: SocialApiResponse | null;
+  onOpenPost: (url: string) => void;
+}) {
+  const { loading, data, onOpenPost } = props;
+
+  if (loading) {
+    return <div className="card card-pad">Loading social…</div>;
+  }
+
+  if (!data) {
+    return (
+      <div className="card card-pad">
+        <div className="subtle">Social data not available.</div>
       </div>
-      <div style={{ fontWeight: 900 }}>{value}</div>
+    );
+  }
+
+  if ('error' in data) {
+    return (
+      <div className="card card-pad" style={{ border: '1px solid rgba(0,0,255,0.25)' }}>
+        <div style={{ fontWeight: 900 }}>Social data unavailable</div>
+        <div className="subtle" style={{ marginTop: 6 }}>
+          {data.error}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <SocialKpiCardLight title="Casts" value={data.engagement.casts.toLocaleString()} />
+        <SocialKpiCardLight title="Recasts" value={data.engagement.recasts.toLocaleString()} />
+        <SocialKpiCardLight title="Likes" value={data.engagement.likes.toLocaleString()} />
+        <SocialKpiCardLight title="Replies" value={data.engagement.replies.toLocaleString()} />
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <SectionTitle title="Top posts" subtitle="Top 7 posts in this window" />
+
+        {data.top_posts.length === 0 ? (
+          <div className="card card-pad">
+            <div className="subtle">No posts found in this timeframe.</div>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {data.top_posts.map((p) => (
+              <div key={p.hash} className="card card-pad" style={{ background: 'rgba(165,210,255,0.18)' }}>
+                <div style={{ fontSize: 13, fontWeight: 900, color: '#0A0A0A' }}>
+                  {p.text.length > 220 ? p.text.slice(0, 220) + '…' : p.text}
+                </div>
+
+                <div className="subtle" style={{ marginTop: 8 }}>
+                  ❤️ {p.likes} · 🔁 {p.recasts} · 💬 {p.replies}
+                </div>
+
+                {p.url ? (
+                  <div style={{ marginTop: 10 }}>
+                    <button className="btn" onClick={() => onOpenPost(p.url)}>
+                      Open post
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function SocialKpiCardLight({ title, value }: { title: string; value: string }) {
+  return (
+    <div
+      style={{
+        borderRadius: 14,
+        padding: 12,
+        background: 'rgba(165,210,255,0.22)',
+        border: '1px solid rgba(0,0,255,0.18)',
+        boxShadow: '0 6px 20px rgba(0,0,0,0.04)',
+      }}
+    >
+      <div style={{ fontSize: 12, marginBottom: 6, color: '#6B7280', fontWeight: 900 }}>{title}</div>
+      <div style={{ fontSize: 18, fontWeight: 900, color: '#0000FF' }}>{value}</div>
     </div>
   );
 }
@@ -582,6 +780,7 @@ function SectionTitle({ title, subtitle }: { title: string; subtitle?: string })
 }
 
 function ShareCard(props: {
+  address: string;
   pfpUrl: string | null;
   displayName: string;
   username: string;
@@ -590,19 +789,16 @@ function ShareCard(props: {
     weeks: number;
     latestLabel: string;
     latestUsdc: number;
+  };
+  social: null | {
     casts: number;
     likes: number;
     recasts: number;
     replies: number;
   };
 }) {
-  const [imgDataUrl, setImgDataUrl] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
   const miniAppLink = 'https://base.app/app/baseapp-reward-dashboard.vercel.app';
 
-  // This is the IMPORTANT change:
-  // We share a URL that has OG meta tags -> X/Base can preview image reliably.
   const sharePageUrl = useMemo(() => {
     const origin =
       typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://baseapp-reward-dashboard.vercel.app';
@@ -615,276 +811,103 @@ function ShareCard(props: {
       weeks: String(props.onchain.weeks),
       latestLabel: props.onchain.latestLabel,
       latestUsdc: String(props.onchain.latestUsdc),
-      casts: String(props.onchain.casts),
-      likes: String(props.onchain.likes),
-      recasts: String(props.onchain.recasts),
-      replies: String(props.onchain.replies),
+      casts: String(props.social?.casts ?? 0),
+      likes: String(props.social?.likes ?? 0),
+      recasts: String(props.social?.recasts ?? 0),
+      replies: String(props.social?.replies ?? 0),
+      address: props.address,
     });
 
     return `${origin}/share?${qs.toString()}`;
-  }, [props.displayName, props.username, props.pfpUrl, props.onchain]);
+  }, [props.address, props.displayName, props.username, props.pfpUrl, props.onchain, props.social]);
+
+  const ogImageUrl = useMemo(() => {
+    const origin =
+      typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://baseapp-reward-dashboard.vercel.app';
+    const sp = new URL(sharePageUrl);
+    return `${origin}/api/og?${sp.searchParams.toString()}`;
+  }, [sharePageUrl]);
 
   const shareText =
-    `I just checked my Base App Reward Dashboard — feeling based.\n` +
-    `Rewards + engagement (latest week).\n` +
-    `Open the app: ${miniAppLink}\n` +
-    `My card: ${sharePageUrl}`;
+    `I just checked my Baseapp Reward Dashboard stats.\n` + `Open the app: ${miniAppLink}\n` + `My card: ${sharePageUrl}`;
 
-  async function generateCanvasCard(): Promise<string | null> {
-    setBusy(true);
+  async function copyText() {
     try {
-      const size = 1080;
-      const canvas = document.createElement('canvas');
-      canvas.width = size;
-      canvas.height = size;
-
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return null;
-
-      // Background gradient
-      const bg = ctx.createLinearGradient(0, 0, size, size);
-      bg.addColorStop(0, '#0000FF');
-      bg.addColorStop(1, '#6D28D9');
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, size, size);
-
-      // Outer frame
-      ctx.fillStyle = 'rgba(255,255,255,0.18)';
-      roundRect(ctx, 50, 50, 980, 980, 64);
-      ctx.fill();
-
-      // Inner card
-      ctx.fillStyle = '#FFFFFF';
-      roundRect(ctx, 85, 85, 910, 910, 56);
-      ctx.fill();
-
-      // Decorative top bar
-      const bar = ctx.createLinearGradient(85, 85, 995, 220);
-      bar.addColorStop(0, '#0000FF');
-      bar.addColorStop(1, '#3B82F6');
-      ctx.fillStyle = bar;
-      roundRect(ctx, 105, 105, 870, 170, 44);
-      ctx.fill();
-
-      // PFP circle
-      if (props.pfpUrl) {
-        try {
-          const img = await loadImage(props.pfpUrl);
-          ctx.save();
-          ctx.beginPath();
-          ctx.arc(190, 190, 62, 0, Math.PI * 2);
-          ctx.closePath();
-          ctx.clip();
-          ctx.drawImage(img, 128, 128, 124, 124);
-          ctx.restore();
-        } catch {
-          // ignore
-        }
-      }
-
-      // Name + username
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = '900 44px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-      ctx.fillText(trimText(ctx, props.displayName || 'Profile', 600), 280, 175);
-
-      ctx.fillStyle = 'rgba(255,255,255,0.9)';
-      ctx.font = '800 28px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-      ctx.fillText(trimText(ctx, props.username || '', 520), 280, 220);
-
-      // Title
-      ctx.fillStyle = '#111827';
-      ctx.font = '900 34px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-      ctx.fillText('Rewards + Social (Latest Week)', 120, 340);
-
-      // Stat boxes
-      const boxes = [
-        { k: 'All-time rewards', v: `$${formatUSDC(props.onchain.allTime)}` },
-        { k: 'Earning weeks', v: `${props.onchain.weeks}` },
-        { k: props.onchain.latestLabel, v: `$${formatUSDC(props.onchain.latestUsdc)}` },
-        { k: 'Casts', v: `${props.onchain.casts}` },
-        { k: 'Likes', v: `${props.onchain.likes}` },
-        { k: 'Recasts', v: `${props.onchain.recasts}` },
-        { k: 'Replies', v: `${props.onchain.replies}` },
-      ];
-
-      for (let i = 0; i < boxes.length; i++) {
-        const col = i % 2;
-        const row = Math.floor(i / 2);
-
-        const bx = 120 + col * 450;
-        const by = 395 + row * 140;
-
-        const g = ctx.createLinearGradient(bx, by, bx + 410, by + 110);
-        g.addColorStop(0, '#0B1020');
-        g.addColorStop(1, '#1D4ED8');
-        ctx.fillStyle = g;
-        roundRect(ctx, bx, by, 410, 110, 26);
-        ctx.fill();
-
-        ctx.fillStyle = 'rgba(255,255,255,0.85)';
-        ctx.font = '900 20px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-        ctx.fillText(trimText(ctx, boxes[i].k, 360), bx + 22, by + 40);
-
-        ctx.fillStyle = '#FFFFFF';
-        ctx.font = '900 38px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-        ctx.fillText(trimText(ctx, boxes[i].v, 360), bx + 22, by + 84);
-      }
-
-      // Footer
-      ctx.fillStyle = '#111827';
-      ctx.font = '900 22px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-      ctx.fillText('Check yours on Base:', 120, 1000);
-
-      ctx.fillStyle = '#0000FF';
-      ctx.font = '900 22px system-ui, -apple-system, Segoe UI, Roboto, Arial';
-      ctx.fillText(trimText(ctx, miniAppLink, 780), 320, 1000);
-
-      const dataUrl = canvas.toDataURL('image/png');
-      setImgDataUrl(dataUrl);
-      return dataUrl;
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function downloadImage() {
-    if (!imgDataUrl) return;
-    const blob = dataUrlToBlob(imgDataUrl);
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement('a');
-    a.href = url;
-    a.rel = 'noreferrer';
-    a.download = 'baseapp-reward-card.png';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-  }
-
-  async function shareNativeLink() {
-    const nav = navigator as WebShareNavigator;
-    const canShare = typeof nav.share === 'function';
-
-    // Share link + text (reliable in Base app; no image file sharing needed)
-    if (!canShare) {
-      try {
-        await navigator.clipboard.writeText(shareText);
-      } catch {
-        // ignore
-      }
-      return;
-    }
-
-    try {
-      await nav.share({
-        text: shareText,
-        url: sharePageUrl,
-        title: 'Base Reward Card',
-      });
+      await navigator.clipboard.writeText(shareText);
     } catch {
+      // ignore
+    }
+  }
+
+  async function shareInBase() {
+    try {
+      if (typeof actions.composeCast === 'function') {
+        await actions.composeCast({
+          text: shareText,
+          embeds: [sharePageUrl],
+        });
+        return;
+      }
+    } catch {
+      // fallback below
+    }
+
+    const nav = navigator as WebShareNavigator;
+    if (typeof nav.share === 'function') {
       try {
-        await navigator.clipboard.writeText(shareText);
+        await nav.share({
+          text: shareText,
+          url: sharePageUrl,
+          title: 'Baseapp Reward Dashboard',
+        });
+        return;
       } catch {
-        // ignore
+        // fallback below
       }
     }
+
+    await copyText();
   }
 
   function openXIntent() {
     const intent = new URL('https://x.com/intent/tweet');
     intent.searchParams.set('text', shareText);
-    // X prefers URL separately too:
     intent.searchParams.set('url', sharePageUrl);
-    window.open(intent.toString(), '_blank', 'noopener,noreferrer');
+    void openUrl(intent.toString());
   }
 
   return (
     <div className="card card-pad">
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <button className="btn" disabled={busy} onClick={() => void generateCanvasCard()}>
-          {busy ? 'Generating…' : 'Generate card'}
+        <button className="btn" onClick={() => void shareInBase()}>
+          Share
         </button>
 
-        <button
-          className="btn"
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(shareText);
-            } catch {
-              // ignore
-            }
-          }}
-        >
+        <button className="btn" onClick={() => void copyText()}>
           Copy share text
         </button>
 
-        <button className="btn" onClick={() => void shareNativeLink()}>
-          Share
+        <button className="btn" onClick={() => void openUrl(sharePageUrl)}>
+          Open share page
+        </button>
+
+        <button className="btn" onClick={() => void openUrl(ogImageUrl)}>
+          Open share image
         </button>
 
         <button className="btn" onClick={() => openXIntent()}>
           Post to X
         </button>
-
-        {imgDataUrl ? (
-          <button className="btn" onClick={() => void downloadImage()}>
-            Download image
-          </button>
-        ) : null}
       </div>
 
       <div className="subtle" style={{ marginTop: 10 }}>
-        Sharing uses a link preview (works best on X/Base). Download is for manual posting.
+        Tip: “Share” will try to open the Base app composer. If it’s not available, copy the text and post manually.
       </div>
 
-      {imgDataUrl ? (
-        <div style={{ marginTop: 12 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={imgDataUrl} alt="share card" style={{ width: '100%', borderRadius: 14 }} />
-        </div>
-      ) : null}
+      <div style={{ marginTop: 12 }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={ogImageUrl} alt="share card" style={{ width: '100%', borderRadius: 14 }} />
+      </div>
     </div>
   );
-}
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  const rr = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
-  ctx.closePath();
-}
-
-function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = src;
-  });
-}
-
-function dataUrlToBlob(dataUrl: string) {
-  const parts = dataUrl.split(',');
-  const mime = parts[0]?.match(/:(.*?);/)?.[1] || 'image/png';
-  const binStr = atob(parts[1] || '');
-  const len = binStr.length;
-  const arr = new Uint8Array(len);
-  for (let i = 0; i < len; i++) arr[i] = binStr.charCodeAt(i);
-  return new Blob([arr], { type: mime });
-}
-
-function trimText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
-  let t = text || '';
-  if (ctx.measureText(t).width <= maxWidth) return t;
-  while (t.length > 0 && ctx.measureText(t + '…').width > maxWidth) {
-    t = t.slice(0, -1);
-  }
-  return t + '…';
 }
