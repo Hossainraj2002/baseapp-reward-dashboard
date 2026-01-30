@@ -14,14 +14,32 @@ function shortAddress(addr: string): string {
   return `${a.slice(0, 6)}…${a.slice(-4)}`;
 }
 
-function baseappHandleFromUsername(username: string): string {
-  const u = username.trim();
-  const first = u.split('.')[0] || u;
-  return first;
-}
-
 function clampToTwoDecimals(x: number): string {
   return x.toFixed(2);
+}
+
+/**
+ * Baseapp profile routing rule:
+ * - If Farcaster username ends with ".base.eth", use the first label (before the first dot)
+ *   Example: "akbaronchain.base.eth" -> "akbaronchain"
+ * - Otherwise, use the wallet address
+ */
+function buildBaseappProfileUrl(params: { username: string | null; address: string }): string {
+  const { username, address } = params;
+
+  const cleanAddress = address.trim();
+  const cleanUsername = (username || '').trim();
+
+  if (cleanUsername.length > 0) {
+    const lower = cleanUsername.toLowerCase();
+    if (lower.endsWith('.base.eth')) {
+      const first = cleanUsername.split('.')[0] || cleanUsername;
+      return `https://base.app/profile/${encodeURIComponent(first)}`;
+    }
+  }
+
+  // Fallback: always use address
+  return `https://base.app/profile/${encodeURIComponent(cleanAddress)}`;
 }
 
 function StatChip({ label, value }: { label: string; value: string }) {
@@ -53,9 +71,17 @@ function OnchainCard({ title, value }: { title: string; value: string }) {
 export default function FindAddressProfileView({ data }: { data: ProfilePayload }) {
   const fc = data.farcaster;
 
-  const showBaseappLink = Boolean(fc?.username);
-  const baseHandle = fc?.username ? baseappHandleFromUsername(fc.username) : null;
-  const baseappUrl = baseHandle ? `https://base.app/profile/${encodeURIComponent(baseHandle)}` : null;
+  // Always generate a valid Baseapp URL:
+  // - .base.eth usernames -> handle
+  // - everyone else -> wallet address
+  const baseappUrl = buildBaseappProfileUrl({
+    username: fc?.username ?? null,
+    address: data.address,
+  });
+
+  // Show button if we have either a Farcaster user OR at least a valid address (always true here)
+  // If you want to hide button only when Farcaster missing, tell me — but you asked for address fallback.
+  const showBaseappLink = Boolean(baseappUrl);
 
   const displayName = fc?.display_name || (fc?.username ? `@${fc.username}` : shortAddress(data.address));
   const usernameLine = fc?.username ? `@${fc.username}` : shortAddress(data.address);
@@ -120,8 +146,8 @@ export default function FindAddressProfileView({ data }: { data: ProfilePayload 
       </div>
 
       {/* Baseapp profile button */}
-      {showBaseappLink && baseappUrl ? (
-        <a href={baseappUrl} target="_blank" rel="noreferrer" className="btn btnPrimary" style={baseappBtn}>
+      {showBaseappLink ? (
+        <a href={baseappUrl} target="_blank" rel="noreferrer noopener" className="btn btnPrimary" style={baseappBtn}>
           Visit user profile on Baseapp
         </a>
       ) : null}
