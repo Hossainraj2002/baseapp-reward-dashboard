@@ -2,199 +2,168 @@ import { ImageResponse } from 'next/og';
 
 export const runtime = 'edge';
 
-function pick(searchParams: URLSearchParams, key: string, fallback = ''): string {
-  const v = searchParams.get(key);
-  return typeof v === 'string' && v.length > 0 ? v : fallback;
-}
-
-function pickNum(searchParams: URLSearchParams, key: string, fallback = 0): number {
-  const v = Number(searchParams.get(key));
-  return Number.isFinite(v) ? v : fallback;
-}
-
-function formatUSDC(n: number): string {
-  return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
-
-function shortAddr(addr: string): string {
-  const a = addr.trim();
-  if (!a.startsWith('0x') || a.length < 10) return a;
-  return `${a.slice(0, 6)}…${a.slice(-4)}`;
+function safeText(s: string, max = 80) {
+  const cleaned = (s || '').replace(/\s+/g, ' ').trim();
+  return cleaned.length > max ? `${cleaned.slice(0, max - 1)}…` : cleaned;
 }
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
 
-  // Identity (optional): show name if present, otherwise show short address.
-  const name = pick(searchParams, 'name', 'Rewards');
-  const addr = pick(searchParams, 'addr', '');
-  const identity = addr ? shortAddr(addr) : '';
+  const displayName = safeText(searchParams.get('name') || 'Baseapp user', 28);
+  const username = safeText(searchParams.get('username') || '', 28);
+  const pfp = searchParams.get('pfp') || '';
 
-  // Onchain stats (required)
-  const allTime = pickNum(searchParams, 'allTime', 0);
-  const weeks = pickNum(searchParams, 'weeks', 0);
+  const allTime = safeText(searchParams.get('allTime') || '0', 20);
+  const earningWeeks = safeText(searchParams.get('weeks') || '0', 20);
+  const latestLabel = safeText(searchParams.get('latestLabel') || 'Latest week', 26);
+  const latestUsdc = safeText(searchParams.get('latestUsdc') || '0', 20);
 
-  const latestLabel = pick(searchParams, 'latestLabel', 'Latest week');
-  const latestUsdc = pickNum(searchParams, 'latestUsdc', 0);
-
-  const prevLabel = pick(searchParams, 'prevLabel', 'Previous week');
-  const prevUsdc = pickNum(searchParams, 'prevUsdc', 0);
-
-  const appLink = 'https://base.app/app/baseapp-reward-dashboard.vercel.app';
+  const brand = {
+    blue: '#0000FF',
+    light: '#A5D2FF',
+    ink: '#0A0A0A',
+    surface: '#FFFFFF',
+  };
 
   return new ImageResponse(
     (
       <div
         style={{
-          width: 1200,
-          height: 630,
+          width: '1200px',
+          height: '630px',
           display: 'flex',
-          padding: 44,
-          background: 'linear-gradient(135deg, #0000FF 0%, #A5D2FF 100%)',
+          alignItems: 'stretch',
+          justifyContent: 'center',
+          background: `linear-gradient(135deg, ${brand.blue} 0%, #0B2BFF 45%, ${brand.light} 100%)`,
           fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial',
+          padding: 44,
         }}
       >
         <div
           style={{
-            width: '100%',
-            height: '100%',
-            borderRadius: 46,
-            background: 'rgba(255,255,255,0.22)',
-            padding: 16,
+            flex: 1,
+            borderRadius: 36,
+            background: 'rgba(255,255,255,0.92)',
+            boxShadow: '0 30px 90px rgba(0,0,0,0.25)',
+            border: '1px solid rgba(0,0,255,0.20)',
             display: 'flex',
+            flexDirection: 'column',
+            padding: 40,
           }}
         >
-          <div
-            style={{
-              width: '100%',
-              height: '100%',
-              borderRadius: 40,
-              background: '#FFFFFF',
-              padding: 34,
-              display: 'flex',
-              flexDirection: 'column',
-            }}
-          >
-            {/* Header */}
+          {/* Header */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
             <div
               style={{
+                width: 84,
+                height: 84,
+                borderRadius: 24,
+                overflow: 'hidden',
+                background: brand.surface,
+                border: '2px solid rgba(0,0,255,0.20)',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 18,
+                justifyContent: 'center',
               }}
             >
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ fontSize: 18, fontWeight: 900, color: '#0000FF', letterSpacing: 0.3 }}>
-                  Baseapp Reward Dashboard
-                </div>
-                <div style={{ marginTop: 8, fontSize: 44, fontWeight: 900, color: '#0B1020', lineHeight: 1.05 }}>
-                  {name}
-                </div>
-                {identity ? (
-                  <div style={{ marginTop: 10, fontSize: 18, fontWeight: 900, color: '#6B7280' }}>{identity}</div>
-                ) : null}
-              </div>
+              {pfp ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={pfp} alt="pfp" width={84} height={84} style={{ objectFit: 'cover' }} />
+              ) : (
+                <div style={{ color: brand.blue, fontWeight: 900, fontSize: 34 }}>A</div>
+              )}
+            </div>
 
-              <div
-                style={{
-                  width: 280,
-                  height: 108,
-                  borderRadius: 28,
-                  background: '#0000FF',
-                  border: '1px solid rgba(0,0,255,0.35)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'center',
-                  padding: 20,
-                  textAlign: 'center',
-                }}
-              >
-                <div style={{ fontSize: 14, fontWeight: 900, color: 'rgba(255,255,255,0.90)' }}>All-time rewards</div>
-                <div style={{ fontSize: 44, fontWeight: 900, color: '#FFFFFF', marginTop: 8 }}>
-                  ${formatUSDC(allTime)}
-                </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ fontSize: 44, fontWeight: 900, color: brand.ink, lineHeight: 1.05 }}>
+                {displayName}
+              </div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: brand.blue }}>
+                {username ? `@${username}` : 'Profile stats'}
               </div>
             </div>
 
-            {/* Stats grid */}
-            <div style={{ marginTop: 26, display: 'flex', gap: 18, flexWrap: 'wrap' }}>
-              <div
-                style={{
-                  width: 520,
-                  height: 148,
-                  borderRadius: 34,
-                  background: 'linear-gradient(135deg, #0B1020 0%, #1D4ED8 100%)',
-                  padding: 24,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'center',
-                }}
-              >
-                <div style={{ fontSize: 18, fontWeight: 900, color: 'rgba(255,255,255,0.86)' }}>Earning weeks</div>
-                <div style={{ marginTop: 12, fontSize: 56, fontWeight: 900, color: '#FFFFFF' }}>
-                  {weeks.toLocaleString()}
-                </div>
+            <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+              <div style={{ fontSize: 22, fontWeight: 900, color: brand.blue }}>Baseapp Reward Dashboard</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: 'rgba(10,10,10,0.65)' }}>
+                Onchain rewards summary
               </div>
+            </div>
+          </div>
 
-              <div
-                style={{
-                  width: 520,
-                  height: 148,
-                  borderRadius: 34,
-                  background: 'linear-gradient(135deg, #0000FF 0%, #3B82F6 100%)',
-                  padding: 24,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'center',
-                }}
-              >
-                <div style={{ fontSize: 18, fontWeight: 900, color: 'rgba(255,255,255,0.90)' }}>{latestLabel}</div>
-                <div style={{ marginTop: 12, fontSize: 56, fontWeight: 900, color: '#FFFFFF' }}>
-                  ${formatUSDC(latestUsdc)}
-                </div>
-              </div>
+          {/* Cards */}
+          <div
+            style={{
+              display: 'flex',
+              gap: 18,
+              marginTop: 32,
+              flexWrap: 'wrap',
+            }}
+          >
+            <StatCard label="All-time rewards" value={`$${allTime}`} accent={brand.blue} />
+            <StatCard label="Earning weeks" value={earningWeeks} accent={brand.blue} />
+            <StatCard label={latestLabel} value={`$${latestUsdc}`} accent={brand.blue} wide />
+          </div>
 
-              <div
-                style={{
-                  width: 520,
-                  height: 148,
-                  borderRadius: 34,
-                  background: '#F4F7FF',
-                  border: '1px solid rgba(0,0,255,0.14)',
-                  padding: 24,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'center',
-                }}
-              >
-                <div style={{ fontSize: 18, fontWeight: 900, color: '#6B7280' }}>{prevLabel}</div>
-                <div style={{ marginTop: 12, fontSize: 56, fontWeight: 900, color: '#0000FF' }}>
-                  ${formatUSDC(prevUsdc)}
-                </div>
-              </div>
+          {/* Footer */}
+          <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div
+              style={{
+                padding: '10px 16px',
+                borderRadius: 999,
+                background: 'rgba(0,0,255,0.08)',
+                border: '1px solid rgba(0,0,255,0.16)',
+                color: brand.blue,
+                fontWeight: 900,
+                fontSize: 18,
+              }}
+            >
+              Check yours in Base App
+            </div>
 
-              <div
-                style={{
-                  width: 520,
-                  height: 148,
-                  borderRadius: 34,
-                  background: '#FFFFFF',
-                  border: '1px solid rgba(10,10,10,0.10)',
-                  padding: 24,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'center',
-                }}
-              >
-                <div style={{ fontSize: 18, fontWeight: 900, color: '#6B7280' }}>Check yours on Base</div>
-                <div style={{ marginTop: 12, fontSize: 20, fontWeight: 900, color: '#0000FF' }}>{appLink}</div>
-              </div>
+            <div style={{ marginLeft: 'auto', color: 'rgba(10,10,10,0.60)', fontSize: 18, fontWeight: 700 }}>
+              base.app/app/baseapp-reward-dashboard.vercel.app
             </div>
           </div>
         </div>
       </div>
     ),
-    { width: 1200, height: 630 }
+    {
+      width: 1200,
+      height: 630,
+    },
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  accent,
+  wide,
+}: {
+  label: string;
+  value: string;
+  accent: string;
+  wide?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        flex: wide ? '1 1 520px' : '1 1 320px',
+        minWidth: wide ? 520 : 320,
+        borderRadius: 24,
+        background: '#FFFFFF',
+        border: '1px solid rgba(10,10,10,0.10)',
+        padding: 26,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        boxShadow: '0 16px 50px rgba(0,0,0,0.10)',
+      }}
+    >
+      <div style={{ fontSize: 18, fontWeight: 900, color: 'rgba(10,10,10,0.62)' }}>{label}</div>
+      <div style={{ fontSize: 44, fontWeight: 900, color: accent, lineHeight: 1 }}>{value}</div>
+    </div>
   );
 }

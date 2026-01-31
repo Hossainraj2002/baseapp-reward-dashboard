@@ -48,6 +48,19 @@ export type ProfilePayload = {
     score: number | null;
     neynar_user_score: number | null;
   };
+  // Backwards-compat alias for components/routes that still use `farcaster_user`.
+  // When present, it has the same value as `farcaster`.
+  farcaster_user?: null | {
+    fid: number;
+    username: string;
+    display_name: string | null;
+    pfp_url: string | null;
+    bio_text: string | null;
+    follower_count: number | null;
+    following_count: number | null;
+    score: number | null;
+    neynar_user_score: number | null;
+  };
   reward_summary: {
     all_time_usdc: number;
     total_weeks_earned: number;
@@ -171,6 +184,7 @@ export function buildProfilePayload(address: string): ProfilePayload {
   return {
     address,
     farcaster,
+    farcaster_user: farcaster,
     reward_summary: {
       all_time_usdc: allTimeTotal,
       total_weeks_earned: totalWeeksEarned,

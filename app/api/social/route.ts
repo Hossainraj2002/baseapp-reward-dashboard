@@ -1,220 +1,211 @@
-// app/api/social/route.ts
-// Social aggregation for a given fid within a time window.
-// Option A semantics (low cost):
-// - Casts = number of root casts created within the window (replies excluded)
-// - Likes/Recasts/Replies = current totals on those casts
+import { NextResponse } from 'next/server';
 
-import { NextRequest, NextResponse } from 'next/server';
+type Json = Record<string, unknown>;
 
-const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY || '';
-const NEYNAR_BASE = 'https://api.neynar.com/v2';
-
-function toString(v: unknown, fallback: string): string {
-  return typeof v === 'string' ? v : fallback;
-}
-
-function toNumber(v: unknown, fallback: number): number {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function isRootCast(cast: Record<string, unknown>): boolean {
-  // Replies usually have a parent_hash (or parent_author / parent_url).
-  // Recasts often have a recasted_cast or cast_type.
-  const parentHash = cast['parent_hash'];
-  const parentAuthor = cast['parent_author'];
-  const parentUrl = cast['parent_url'];
-  const recasted = cast['recasted_cast'];
-  const castType = cast['cast_type'];
-
-  const hasParent =
-    (typeof parentHash === 'string' && parentHash.length > 0) ||
-    parentHash != null ||
-    (typeof parentAuthor === 'object' && parentAuthor != null) ||
-    (typeof parentUrl === 'string' && parentUrl.length > 0);
-
-  const isRecast = recasted != null || (typeof castType === 'string' && castType.toLowerCase() === 'recast');
-
-  return !hasParent && !isRecast;
-}
-
-function pickCastDateIso(cast: Record<string, unknown>): string {
-  // Neynar has used both `timestamp` and `created_at` across endpoints/versions.
-  // We support either to avoid silently returning zeros.
-  const ts = cast['timestamp'];
-  if (typeof ts === 'string' && ts.length > 0) return ts;
-  const ca = cast['created_at'];
-  if (typeof ca === 'string' && ca.length > 0) return ca;
-  return '';
-}
-
-type NeynarUserBulkResponse = {
-  users?: Array<Record<string, unknown>>;
+type SocialMetrics = {
+  casts: number;
+  likes: number;
+  recasts: number;
+  replies: number;
+  top_posts: Array<{ text: string; likes: number; recasts: number; replies: number }>;
 };
 
-type NeynarUserCastsResponse = {
-  casts?: Array<Record<string, unknown>>;
-  next?: { cursor?: string };
-};
+function isObj(v: unknown): v is Json {
+  return typeof v === 'object' && v !== null;
+}
 
-export async function GET(req: NextRequest) {
-  const sp = req.nextUrl.searchParams;
-  const fidRaw = sp.get('fid');
-  const startUtc = sp.get('start');
-  const endUtc = sp.get('end');
+function get(v: unknown, key: string): unknown {
+  return isObj(v) ? v[key] : undefined;
+}
 
-  if (!fidRaw || !startUtc || !endUtc) {
-    return NextResponse.json({ error: 'Missing fid, start, or end' }, { status: 400 });
+function num(v: unknown): number {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
   }
+  return 0;
+}
+
+function str(v: unknown): string | null {
+  return typeof v === 'string' ? v : null;
+}
+
+function parseMs(iso: string): number | null {
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function castCreatedMs(cast: unknown): number | null {
+  // Neynar sometimes nests cast under `cast`
+  const createdAt =
+    str(get(cast, 'created_at')) ??
+    str(get(get(cast, 'cast'), 'created_at')) ??
+    str(get(cast, 'timestamp')) ??
+    str(get(get(cast, 'cast'), 'timestamp'));
+
+  if (!createdAt) return null;
+  return parseMs(createdAt);
+}
+
+function extractCounts(cast: unknown): { likes: number; recasts: number; replies: number } {
+  const reactions = get(cast, 'reactions');
+  const repliesObj = get(cast, 'replies');
+
+  const likes = num(get(reactions, 'likes_count'));
+  const recasts =
+    num(get(reactions, 'recasts_count')) ||
+    num(get(reactions, 'recasts')) ||
+    num(get(reactions, 'recastsCount'));
+  const replies = num(get(repliesObj, 'count'));
+
+  return { likes, recasts, replies };
+}
+
+function normalizeText(cast: unknown): string {
+  const text = str(get(cast, 'text')) ?? str(get(get(cast, 'cast'), 'text')) ?? '';
+  const trimmed = text.replace(/\s+/g, ' ').trim();
+  return trimmed.length > 280 ? `${trimmed.slice(0, 277)}...` : trimmed;
+}
+
+function buildTopPostItem(cast: unknown): { text: string; likes: number; recasts: number; replies: number } {
+  const { likes, recasts, replies } = extractCounts(cast);
+  return {
+    text: normalizeText(cast),
+    likes,
+    recasts,
+    replies,
+  };
+}
+
+function rankScore(p: { likes: number; recasts: number; replies: number }): number {
+  // simple, stable scoring; tweak later if you want
+  return p.likes + p.recasts * 2 + p.replies;
+}
+
+async function fetchUserCasts(
+  fid: number,
+  apiKey: string,
+  startMs: number,
+  endMs: number
+): Promise<unknown[]> {
+  const casts: unknown[] = [];
+  let cursor: string | null = null;
+
+  // Safety: cap pages so we never infinite loop (also controls Neynar cost)
+  for (let page = 0; page < 20; page += 1) {
+    const url = new URL('https://api.neynar.com/v2/farcaster/feed/user/casts');
+    url.searchParams.set('fid', String(fid));
+    url.searchParams.set('limit', '100');
+    url.searchParams.set('include_replies', 'false');
+    url.searchParams.set('include_recasts', 'false');
+
+    if (cursor) url.searchParams.set('cursor', cursor);
+
+    const res = await fetch(url.toString(), {
+      headers: {
+        accept: 'application/json',
+        api_key: apiKey,
+      },
+      cache: 'no-store',
+    });
+
+    if (!res.ok) {
+      throw new Error(`Neynar error: ${res.status}`);
+    }
+
+    const json: unknown = await res.json();
+    const items = get(json, 'casts');
+    if (Array.isArray(items)) {
+      // Filter by timeframe here, because the endpoint may not support start/end directly.
+      for (const c of items) {
+        const ms = castCreatedMs(c);
+        if (ms == null) continue;
+        if (ms >= startMs && ms < endMs) casts.push(c);
+      }
+
+      // If the API returns items older than start, we can stop early.
+      // We look at the oldest item on this page.
+      const last = items.length > 0 ? items[items.length - 1] : null;
+      const lastMs = last ? castCreatedMs(last) : null;
+      if (lastMs != null && lastMs < startMs) break;
+    }
+
+    const next = str(get(json, 'next'));
+    cursor = next;
+
+    if (!cursor) break;
+  }
+
+  return casts;
+}
+
+export async function GET(req: Request) {
+  const apiKey = process.env.NEYNAR_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({ error: 'Missing NEYNAR_API_KEY' }, { status: 500 });
+  }
+
+  const { searchParams } = new URL(req.url);
+  const fidRaw = (searchParams.get('fid') || '').trim();
+  const start = (searchParams.get('start') || '').trim();
+  const end = (searchParams.get('end') || '').trim();
+  const includeTopPosts = searchParams.get('includeTopPosts') === '1';
 
   const fid = Number(fidRaw);
   if (!Number.isFinite(fid) || fid <= 0) {
     return NextResponse.json({ error: 'Invalid fid' }, { status: 400 });
   }
 
-  const startMs = Date.parse(startUtc);
-  const endMs = Date.parse(endUtc);
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
-    return NextResponse.json({ error: 'Invalid date format' }, { status: 400 });
+  const startMs = parseMs(start);
+  const endMs = parseMs(end);
+  if (startMs == null || endMs == null || endMs <= startMs) {
+    return NextResponse.json({ error: 'Invalid start/end' }, { status: 400 });
   }
-
-  if (!NEYNAR_API_KEY) {
-    return NextResponse.json({ error: 'Neynar API key missing or unavailable' }, { status: 500 });
-  }
-
-  const headers: HeadersInit = { accept: 'application/json', 'x-api-key': NEYNAR_API_KEY };
 
   try {
-    // 1) Fetch user profile (kept for compatibility; UI may use it or ignore it)
-    const userUrl = `${NEYNAR_BASE}/farcaster/user/bulk?fids=${fid}`;
-    const userRes = await fetch(userUrl, { headers, cache: 'no-store' });
-    if (!userRes.ok) {
-      return NextResponse.json({ error: `Failed to fetch user (${userRes.status})` }, { status: 502 });
-    }
-    const userData = (await userRes.json()) as NeynarUserBulkResponse;
-    const user = userData.users?.[0] || {};
+    const casts = await fetchUserCasts(fid, apiKey, startMs, endMs);
 
-    // 2) Fetch user's casts (paginated)
-    // NOTE: include_replies=false to match “main posts” expectation.
-    let allCasts: Array<Record<string, unknown>> = [];
-    let cursor: string | null = null;
+    let totalLikes = 0;
+    let totalRecasts = 0;
+    let totalReplies = 0;
 
-    for (let page = 0; page < 10; page++) {
-      const castsUrl = new URL(`${NEYNAR_BASE}/farcaster/feed/user/casts`);
-      castsUrl.searchParams.set('fid', String(fid));
-      castsUrl.searchParams.set('limit', '150');
-      castsUrl.searchParams.set('include_replies', 'false');
-      if (cursor) castsUrl.searchParams.set('cursor', cursor);
+    const topCandidates: Array<{ text: string; likes: number; recasts: number; replies: number }> = [];
 
-      const castsRes = await fetch(castsUrl.toString(), { headers, cache: 'no-store' });
-      if (!castsRes.ok) {
-        return NextResponse.json({ error: `Failed to fetch casts (${castsRes.status})` }, { status: 502 });
+    for (const c of casts) {
+      const counts = extractCounts(c);
+      totalLikes += counts.likes;
+      totalRecasts += counts.recasts;
+      totalReplies += counts.replies;
+
+      if (includeTopPosts) {
+        topCandidates.push(buildTopPostItem(c));
       }
-
-      const castsData = (await castsRes.json()) as NeynarUserCastsResponse;
-      const pageCasts = castsData.casts || [];
-
-      allCasts = allCasts.concat(pageCasts);
-      cursor = castsData.next?.cursor || null;
-
-      if (!cursor || pageCasts.length === 0) break;
-
-      const oldestCast = pageCasts[pageCasts.length - 1];
-      const oldestMs = Date.parse(pickCastDateIso(oldestCast));
-      if (Number.isFinite(oldestMs) && oldestMs < startMs) break;
     }
 
-    // 3) Filter casts within the time window AND ensure root casts
-    const inWindowRoot = allCasts
-      .filter((c) => {
-        const ms = Date.parse(pickCastDateIso(c));
-        if (!Number.isFinite(ms)) return false;
-        return ms >= startMs && ms < endMs;
-      })
-      .filter((c) => isRootCast(c));
-
-    // 4) Count engagement
-    let castsCount = 0;
-    let likesReceived = 0;
-    let recastsReceived = 0;
-    let repliesReceived = 0;
-
-    for (const cast of inWindowRoot) {
-      castsCount++;
-      const reactions = cast.reactions as Record<string, unknown> | undefined;
-      const replies = cast.replies as Record<string, unknown> | undefined;
-
-      likesReceived += toNumber(reactions?.likes_count, 0);
-      recastsReceived += toNumber(reactions?.recasts_count, 0);
-      repliesReceived += toNumber(replies?.count, 0);
+    let top_posts: SocialMetrics['top_posts'] = [];
+    if (includeTopPosts) {
+      top_posts = topCandidates
+        .sort((a, b) => rankScore(b) - rankScore(a))
+        .slice(0, 7)
+        .map((p) => ({
+          text: p.text,
+          likes: p.likes,
+          recasts: p.recasts,
+          replies: p.replies,
+        }));
     }
 
-    // 5) Top 7 posts in the window (sorted by engagement)
-    const scored = inWindowRoot
-      .map((c) => {
-        const reactions = c.reactions as Record<string, unknown> | undefined;
-        const replies = c.replies as Record<string, unknown> | undefined;
-        const likes = toNumber(reactions?.likes_count, 0);
-        const recasts = toNumber(reactions?.recasts_count, 0);
-        const repl = toNumber(replies?.count, 0);
-        return {
-          cast: c,
-          likes,
-          recasts,
-          replies: repl,
-          score: likes + recasts + repl,
-        };
-      })
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 7);
+    const payload: SocialMetrics = {
+      casts: casts.length,
+      likes: totalLikes,
+      recasts: totalRecasts,
+      replies: totalReplies,
+      top_posts,
+    };
 
-    const topPosts = scored.map((s) => {
-      const c = s.cast;
-      return {
-        hash: toString(c.hash, ''),
-        text: toString(c.text, ''),
-        created_at: pickCastDateIso(c),
-        likes: s.likes,
-        recasts: s.recasts,
-        replies: s.replies,
-        url: toString(c.url, ''),
-      };
-    });
-
-    return NextResponse.json({
-      fid,
-      user: {
-        username: toString(user.username, ''),
-        display_name: toString(user.display_name, ''),
-        pfp_url: toString(user.pfp_url, ''),
-        follower_count: toNumber(user.follower_count, 0),
-        following_count: toNumber(user.following_count, 0),
-      },
-      window: {
-        start_utc: startUtc,
-        end_utc: endUtc,
-      },
-      engagement: {
-        casts: castsCount,
-        likes: likesReceived,
-        recasts: recastsReceived,
-        replies: repliesReceived,
-      },
-      top_posts: topPosts,
-
-      // Legacy keys (kept so older client code still works)
-      start_utc: startUtc,
-      end_utc: endUtc,
-      totals: {
-        casts: castsCount,
-        likes: likesReceived,
-        recasts: recastsReceived,
-        replies: repliesReceived,
-      },
-      posts: topPosts,
-    });
-  } catch (err) {
-    console.error('Social API error:', err);
-    return NextResponse.json({ error: 'Failed to fetch social data' }, { status: 500 });
+    return NextResponse.json(payload, { status: 200 });
+  } catch {
+    return NextResponse.json({ error: 'Failed to load social data' }, { status: 500 });
   }
 }
