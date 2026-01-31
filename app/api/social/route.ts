@@ -38,6 +38,16 @@ function isRootCast(cast: Record<string, unknown>): boolean {
   return !hasParent && !isRecast;
 }
 
+function pickCastDateIso(cast: Record<string, unknown>): string {
+  // Neynar has used both `timestamp` and `created_at` across endpoints/versions.
+  // We support either to avoid silently returning zeros.
+  const ts = cast['timestamp'];
+  if (typeof ts === 'string' && ts.length > 0) return ts;
+  const ca = cast['created_at'];
+  if (typeof ca === 'string' && ca.length > 0) return ca;
+  return '';
+}
+
 type NeynarUserBulkResponse = {
   users?: Array<Record<string, unknown>>;
 };
@@ -110,15 +120,14 @@ export async function GET(req: NextRequest) {
       if (!cursor || pageCasts.length === 0) break;
 
       const oldestCast = pageCasts[pageCasts.length - 1];
-      const oldestMs = Date.parse(toString(oldestCast?.timestamp, ''));
+      const oldestMs = Date.parse(pickCastDateIso(oldestCast));
       if (Number.isFinite(oldestMs) && oldestMs < startMs) break;
     }
 
     // 3) Filter casts within the time window AND ensure root casts
     const inWindowRoot = allCasts
       .filter((c) => {
-        const timestamp = toString(c['timestamp'], '');
-        const ms = Date.parse(timestamp);
+        const ms = Date.parse(pickCastDateIso(c));
         if (!Number.isFinite(ms)) return false;
         return ms >= startMs && ms < endMs;
       })
@@ -164,7 +173,7 @@ export async function GET(req: NextRequest) {
       return {
         hash: toString(c.hash, ''),
         text: toString(c.text, ''),
-        created_at: toString(c.timestamp, ''),
+        created_at: pickCastDateIso(c),
         likes: s.likes,
         recasts: s.recasts,
         replies: s.replies,
@@ -192,6 +201,17 @@ export async function GET(req: NextRequest) {
         replies: repliesReceived,
       },
       top_posts: topPosts,
+
+      // Legacy keys (kept so older client code still works)
+      start_utc: startUtc,
+      end_utc: endUtc,
+      totals: {
+        casts: castsCount,
+        likes: likesReceived,
+        recasts: recastsReceived,
+        replies: repliesReceived,
+      },
+      posts: topPosts,
     });
   } catch (err) {
     console.error('Social API error:', err);

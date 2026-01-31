@@ -19,8 +19,8 @@ export async function generateMetadata({
 
   const ogImage = `${origin}/api/og?${qs.toString()}`;
 
-  const title = 'Base Reward Card';
-  const description = 'Rewards + social engagement card (latest week)';
+  const title = 'Baseapp Reward Card';
+  const description = 'Onchain reward stats card for sharing.';
 
   return {
     title,
