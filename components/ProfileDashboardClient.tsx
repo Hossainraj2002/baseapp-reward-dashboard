@@ -202,7 +202,7 @@ export default function ProfileDashboardClient() {
   const [profileLoading, setProfileLoading] = useState(false);
 
   const [socialCurrent, setSocialCurrent] = useState<SocialPayload | null>(null);
-  const [socialLast, setSocialLast] = useState<SocialPayload | null>(null);
+  const [, setSocialLast] = useState<SocialPayload | null>(null);
   const [socialErr, setSocialErr] = useState<string | null>(null);
   const [socialLoading, setSocialLoading] = useState(false);
 
