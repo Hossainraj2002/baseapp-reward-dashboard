@@ -114,8 +114,7 @@ function prettyWindowLabel(startIso: string, endIso: string) {
   const s = new Date(startIso);
   const e = new Date(endIso);
   const pad = (x: number) => String(x).padStart(2, "0");
-  const fmt = (dt: Date) =>
-    `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
+  const fmt = (dt: Date) => `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
   return `[${fmt(s)} → ${fmt(e)}]`;
 }
 
@@ -185,9 +184,7 @@ function SoftStatCard({
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, fontWeight: 1000, color: "rgba(0,0,0,0.55)" }}>{label}</div>
-          <div style={{ fontSize: 24, fontWeight: 1100, color: "#0A0A0A", marginTop: 2 }}>
-            {formatInt(value)}
-          </div>
+          <div style={{ fontSize: 24, fontWeight: 1100, color: "#0A0A0A", marginTop: 2 }}>{formatInt(value)}</div>
         </div>
       </div>
     </div>
@@ -198,8 +195,10 @@ export default function ProfileDashboardClient({ address }: { address?: `0x${str
   const { context } = useMiniKit();
   const inBaseApp = Boolean(context);
 
-  // ✅ FIX: if no prop is passed, use connected wallet address
-  const { address: walletAddress, isConnected } = useAccount();
+  // ✅ do NOT destructure isConnected (it was unused and caused build fail)
+  const { address: walletAddress } = useAccount();
+
+  // ✅ resolve address from prop OR connected wallet
   const resolvedAddress = (address ?? walletAddress) as `0x${string}` | undefined;
 
   // ===== Data state =====
@@ -222,29 +221,6 @@ export default function ProfileDashboardClient({ address }: { address?: `0x${str
   const { sendTransactionAsync, isPending: ethPending } = useSendTransaction();
   const { writeContractAsync, isPending: usdcPending } = useWriteContract();
 
-  // If no wallet connected and no address prop, show a friendly message (keeps UX safe)
-  if (!resolvedAddress) {
-    return (
-      <div style={{ paddingBottom: 40 }}>
-        {!inBaseApp ? (
-          <div className="card card-pad" style={{ marginBottom: 12 }}>
-            <div style={{ fontWeight: 1000, fontSize: 14 }}>Tip</div>
-            <div className="subtle" style={{ marginTop: 6 }}>
-              For the best experience, open this inside the <b>Base app</b> Miniapp.
-            </div>
-          </div>
-        ) : null}
-
-        <div className="card card-pad">
-          <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Connect your wallet</div>
-          <div className="subtle" style={{ marginTop: 8 }}>
-            Open inside Base app Miniapp and connect your wallet to load your profile.
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // ===== Load Profile (store first, Neynar fallback) =====
   useEffect(() => {
     let alive = true;
@@ -252,8 +228,17 @@ export default function ProfileDashboardClient({ address }: { address?: `0x${str
     async function run() {
       setProfile(null);
       setProfileErr(null);
-      setProfileLoading(true);
+      setSocialCurrent(null);
+      setSocialLast(null);
+      setSocialErr(null);
 
+      if (!resolvedAddress) {
+        // not an error, just no address yet
+        setProfileLoading(false);
+        return;
+      }
+
+      setProfileLoading(true);
       try {
         const res = await fetch(`/api/profile?address=${resolvedAddress}&resolve=1`, { cache: "no-store" });
         if (!res.ok) throw new Error(`Profile API failed (${res.status})`);
@@ -277,6 +262,7 @@ export default function ProfileDashboardClient({ address }: { address?: `0x${str
 
   const latestWeekStartIso = profile?.reward_summary?.latest_week_start_utc ?? null;
 
+  // ✅ useMemo is always called (not conditional)
   const currentWindow = useMemo(() => {
     if (!latestWeekStartIso) return null;
     const start = new Date(latestWeekStartIso);
@@ -388,6 +374,9 @@ export default function ProfileDashboardClient({ address }: { address?: `0x${str
   const rs = profile?.reward_summary ?? null;
   const rh = profile?.reward_history ?? [];
 
+  // ✅ Render can be conditional (that’s fine). Hooks are already declared above.
+  const showNoAddress = !resolvedAddress;
+
   return (
     <div style={{ paddingBottom: 40 }}>
       {!inBaseApp ? (
@@ -399,219 +388,218 @@ export default function ProfileDashboardClient({ address }: { address?: `0x${str
         </div>
       ) : null}
 
-      {/* Profile header (no bio/copy/visit/change) */}
-      <div className="card card-pad">
-        {profileLoading ? (
-          <div style={{ height: 70, borderRadius: 16, background: "rgba(0,0,0,0.06)" }} />
-        ) : profileErr ? (
-          <div style={{ color: "#B91C1C", fontWeight: 1000 }}>{profileErr}</div>
-        ) : !profile ? null : (
-          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-            <Image
-              src={u?.pfp_url || "/icon.png"}
-              alt="pfp"
-              width={72}
-              height={72}
-              style={{
-                borderRadius: 18,
-                border: "1px solid rgba(0,0,0,0.10)",
-                background: "rgba(0,0,0,0.03)",
-              }}
-            />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div
-                style={{
-                  fontSize: 20,
-                  fontWeight: 1100,
-                  color: "#0A0A0A",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {u?.display_name || u?.username || "Unknown"}
-              </div>
-              <div
-                style={{
-                  marginTop: 2,
-                  color: "#0000FF",
-                  fontWeight: 1000,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                @{u?.username || "unknown"}
-              </div>
-
-              <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 8 }}>
-                <Pill label="Score" value={(u?.score ?? 0).toFixed(2)} icon={<span>🪐</span>} />
-                <Pill label="FID" value={formatInt(u?.fid ?? 0)} icon={<span>🆔</span>} />
-                <Pill label="Following" value={formatInt(u?.following_count ?? 0)} icon={<span>➕</span>} />
-                <Pill label="Followers" value={formatInt(u?.follower_count ?? 0)} icon={<span>👥</span>} />
-              </div>
-            </div>
+      {showNoAddress ? (
+        <div className="card card-pad">
+          <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Connect your wallet</div>
+          <div className="subtle" style={{ marginTop: 8 }}>
+            No wallet address detected yet. Open inside Base app Miniapp and connect your wallet to load your profile.
           </div>
-        )}
-      </div>
-
-      {/* Onchain rewards */}
-      {profile ? (
-        <div style={{ marginTop: 18 }}>
-          <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Onchain rewards</div>
-          <div className="subtle" style={{ marginTop: 4 }}>
-            Your Base app weekly reward stats
-          </div>
-
-          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
-              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>All-time rewards</div>
-              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
-                {formatUsd(rs?.all_time_usdc ?? 0)}
-              </div>
-            </div>
-
-            <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
-              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>Earning weeks</div>
-              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
-                {formatInt(rs?.earning_weeks ?? 0)}
-              </div>
-            </div>
-
-            <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
-              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>
-                {rs?.latest_week_label || "Current week"}
-              </div>
-              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
-                {formatUsd(rs?.latest_week_usdc ?? 0)}
-              </div>
-              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, opacity: 0.9 }}>Current week</div>
-            </div>
-
-            <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
-              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>
-                {rs?.prev_week_label || "Previous week"}
-              </div>
-              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
-                {formatUsd(rs?.prev_week_usdc ?? 0)}
-              </div>
-              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, opacity: 0.9 }}>Previous week</div>
-            </div>
-          </div>
-
-          {/* Weekly reward wins */}
-          <div style={{ marginTop: 18 }}>
-            <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Weekly reward wins</div>
-            <div className="subtle" style={{ marginTop: 4 }}>
-              Only weeks with rewards are shown
-            </div>
-
-            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-              {rh.slice(0, 12).map((w) => (
-                <div
-                  key={w.week_number}
-                  className="card"
+        </div>
+      ) : (
+        <>
+          {/* Profile header (no bio/copy/visit/change) */}
+          <div className="card card-pad">
+            {profileLoading ? (
+              <div style={{ height: 70, borderRadius: 16, background: "rgba(0,0,0,0.06)" }} />
+            ) : profileErr ? (
+              <div style={{ color: "#B91C1C", fontWeight: 1000 }}>{profileErr}</div>
+            ) : !profile ? null : (
+              <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+                <Image
+                  src={u?.pfp_url || "/icon.png"}
+                  alt="pfp"
+                  width={72}
+                  height={72}
                   style={{
-                    padding: 12,
-                    borderRadius: 16,
+                    borderRadius: 18,
                     border: "1px solid rgba(0,0,0,0.10)",
-                    background: "rgba(255,255,255,0.92)",
+                    background: "rgba(0,0,0,0.03)",
                   }}
-                >
-                  <div style={{ fontSize: 13, fontWeight: 1100, color: "#0000FF" }}>
-                    {w.week_label.split("–")[0].trim()}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: 20,
+                      fontWeight: 1100,
+                      color: "#0A0A0A",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {u?.display_name || u?.username || "Unknown"}
                   </div>
-                  <div style={{ fontSize: 18, fontWeight: 1200, marginTop: 6 }}>{formatUsd(w.usdc)}</div>
-                  <div className="subtle" style={{ marginTop: 6, fontSize: 11 }}>
-                    {w.week_label.split("–").slice(1).join("–").trim()}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {/* Social */}
-      {profile ? (
-        <div style={{ marginTop: 22 }}>
-          <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Social</div>
-          <div className="subtle" style={{ marginTop: 4 }}>
-            Engagement on your Farcaster posts
-          </div>
-
-          {socialLoading ? (
-            <div className="card card-pad" style={{ marginTop: 12 }}>
-              <div className="subtle">Loading social…</div>
-            </div>
-          ) : socialErr ? (
-            <div className="card card-pad" style={{ marginTop: 12 }}>
-              <div style={{ fontWeight: 1000, color: "#B91C1C" }}>Social load failed</div>
-              <div className="subtle" style={{ marginTop: 6 }}>{socialErr}</div>
-            </div>
-          ) : (
-            <>
-              {socialCurrent && currentWindow ? (
-                <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.92)" }}>
-                  <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Current social activity</div>
-                  <div className="subtle" style={{ marginTop: 4 }}>
-                    {prettyWindowLabel(currentWindow.startIso, currentWindow.endIso)}
+                  <div
+                    style={{
+                      marginTop: 2,
+                      color: "#0000FF",
+                      fontWeight: 1000,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    @{u?.username || "unknown"}
                   </div>
 
-                  <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>📝</span>} label="Casts" value={socialCurrent.casts} />
-                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>❤️</span>} label="Likes" value={socialCurrent.likes} />
-                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>🔁</span>} label="Recasts" value={socialCurrent.recasts} />
-                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>💬</span>} label="Replies" value={socialCurrent.replies} />
+                  <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    <Pill label="Score" value={(u?.score ?? 0).toFixed(2)} icon={<span>🪐</span>} />
+                    <Pill label="FID" value={formatInt(u?.fid ?? 0)} icon={<span>🆔</span>} />
+                    <Pill label="Following" value={formatInt(u?.following_count ?? 0)} icon={<span>➕</span>} />
+                    <Pill label="Followers" value={formatInt(u?.follower_count ?? 0)} icon={<span>👥</span>} />
                   </div>
                 </div>
-              ) : null}
+              </div>
+            )}
+          </div>
 
-              {socialLast && lastRewardWindow ? (
-                <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.78)" }}>
-                  <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Social activity of last reward window</div>
-                  <div className="subtle" style={{ marginTop: 4 }}>
-                    {prettyWindowLabel(lastRewardWindow.startIso, lastRewardWindow.endIso)}
-                  </div>
+          {/* Onchain rewards */}
+          {profile ? (
+            <div style={{ marginTop: 18 }}>
+              <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Onchain rewards</div>
+              <div className="subtle" style={{ marginTop: 4 }}>
+                Your Base app weekly reward stats
+              </div>
 
-                  <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>📝</span>} label="Casts" value={socialLast.casts} />
-                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>❤️</span>} label="Likes" value={socialLast.likes} />
-                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>🔁</span>} label="Recasts" value={socialLast.recasts} />
-                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>💬</span>} label="Replies" value={socialLast.replies} />
-                  </div>
+              <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
+                  <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>All-time rewards</div>
+                  <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>{formatUsd(rs?.all_time_usdc ?? 0)}</div>
+                </div>
 
-                  <div style={{ marginTop: 14 }}>
-                    <div style={{ fontWeight: 1100, color: "#0A0A0A" }}>Top posts</div>
-                    <div className="subtle" style={{ marginTop: 4 }}>Top 7 posts in this window</div>
+                <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
+                  <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>Earning weeks</div>
+                  <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>{formatInt(rs?.earning_weeks ?? 0)}</div>
+                </div>
 
-                    <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-                      {socialLast.top_posts.length === 0 ? (
-                        <div className="subtle" style={{ padding: 12, borderRadius: 14, border: "1px solid rgba(0,0,0,0.08)" }}>
-                          No posts found in this timeframe.
-                        </div>
-                      ) : (
-                        socialLast.top_posts.map((p) => (
-                          <div key={p.hash} className="card" style={{ padding: 14, borderRadius: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
-                            <div style={{ fontWeight: 1000, color: "#0A0A0A", lineHeight: 1.35 }}>{p.text || "—"}</div>
-                            <div className="subtle" style={{ marginTop: 8, display: "flex", gap: 14 }}>
-                              <span>❤️ {formatInt(p.likes)}</span>
-                              <span>🔁 {formatInt(p.recasts)}</span>
-                              <span>💬 {formatInt(p.replies)}</span>
-                            </div>
-                          </div>
-                        ))
-                      )}
+                <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
+                  <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>{rs?.latest_week_label || "Current week"}</div>
+                  <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>{formatUsd(rs?.latest_week_usdc ?? 0)}</div>
+                  <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, opacity: 0.9 }}>Current week</div>
+                </div>
+
+                <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
+                  <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>{rs?.prev_week_label || "Previous week"}</div>
+                  <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>{formatUsd(rs?.prev_week_usdc ?? 0)}</div>
+                  <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, opacity: 0.9 }}>Previous week</div>
+                </div>
+              </div>
+
+              {/* Weekly reward wins */}
+              <div style={{ marginTop: 18 }}>
+                <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Weekly reward wins</div>
+                <div className="subtle" style={{ marginTop: 4 }}>
+                  Only weeks with rewards are shown
+                </div>
+
+                <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                  {rh.slice(0, 12).map((w) => (
+                    <div
+                      key={w.week_number}
+                      className="card"
+                      style={{
+                        padding: 12,
+                        borderRadius: 16,
+                        border: "1px solid rgba(0,0,0,0.10)",
+                        background: "rgba(255,255,255,0.92)",
+                      }}
+                    >
+                      <div style={{ fontSize: 13, fontWeight: 1100, color: "#0000FF" }}>
+                        {w.week_label.split("–")[0].trim()}
+                      </div>
+                      <div style={{ fontSize: 18, fontWeight: 1200, marginTop: 6 }}>{formatUsd(w.usdc)}</div>
+                      <div className="subtle" style={{ marginTop: 6, fontSize: 11 }}>
+                        {w.week_label.split("–").slice(1).join("–").trim()}
+                      </div>
                     </div>
-                  </div>
+                  ))}
                 </div>
-              ) : null}
-            </>
-          )}
-        </div>
-      ) : null}
+              </div>
+            </div>
+          ) : null}
 
-      {/* Support */}
+          {/* Social */}
+          {profile ? (
+            <div style={{ marginTop: 22 }}>
+              <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Social</div>
+              <div className="subtle" style={{ marginTop: 4 }}>
+                Engagement on your Farcaster posts
+              </div>
+
+              {socialLoading ? (
+                <div className="card card-pad" style={{ marginTop: 12 }}>
+                  <div className="subtle">Loading social…</div>
+                </div>
+              ) : socialErr ? (
+                <div className="card card-pad" style={{ marginTop: 12 }}>
+                  <div style={{ fontWeight: 1000, color: "#B91C1C" }}>Social load failed</div>
+                  <div className="subtle" style={{ marginTop: 6 }}>{socialErr}</div>
+                </div>
+              ) : (
+                <>
+                  {socialCurrent && currentWindow ? (
+                    <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.92)" }}>
+                      <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Current social activity</div>
+                      <div className="subtle" style={{ marginTop: 4 }}>
+                        {prettyWindowLabel(currentWindow.startIso, currentWindow.endIso)}
+                      </div>
+
+                      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                        <SoftStatCard icon={<span style={{ fontSize: 18 }}>📝</span>} label="Casts" value={socialCurrent.casts} />
+                        <SoftStatCard icon={<span style={{ fontSize: 18 }}>❤️</span>} label="Likes" value={socialCurrent.likes} />
+                        <SoftStatCard icon={<span style={{ fontSize: 18 }}>🔁</span>} label="Recasts" value={socialCurrent.recasts} />
+                        <SoftStatCard icon={<span style={{ fontSize: 18 }}>💬</span>} label="Replies" value={socialCurrent.replies} />
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {socialLast && lastRewardWindow ? (
+                    <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.78)" }}>
+                      <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Social activity of last reward window</div>
+                      <div className="subtle" style={{ marginTop: 4 }}>
+                        {prettyWindowLabel(lastRewardWindow.startIso, lastRewardWindow.endIso)}
+                      </div>
+
+                      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                        <SoftStatCard icon={<span style={{ fontSize: 18 }}>📝</span>} label="Casts" value={socialLast.casts} />
+                        <SoftStatCard icon={<span style={{ fontSize: 18 }}>❤️</span>} label="Likes" value={socialLast.likes} />
+                        <SoftStatCard icon={<span style={{ fontSize: 18 }}>🔁</span>} label="Recasts" value={socialLast.recasts} />
+                        <SoftStatCard icon={<span style={{ fontSize: 18 }}>💬</span>} label="Replies" value={socialLast.replies} />
+                      </div>
+
+                      <div style={{ marginTop: 14 }}>
+                        <div style={{ fontWeight: 1100, color: "#0A0A0A" }}>Top posts</div>
+                        <div className="subtle" style={{ marginTop: 4 }}>Top 7 posts in this window</div>
+
+                        <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                          {socialLast.top_posts.length === 0 ? (
+                            <div className="subtle" style={{ padding: 12, borderRadius: 14, border: "1px solid rgba(0,0,0,0.08)" }}>
+                              No posts found in this timeframe.
+                            </div>
+                          ) : (
+                            socialLast.top_posts.map((p) => (
+                              <div key={p.hash} className="card" style={{ padding: 14, borderRadius: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
+                                <div style={{ fontWeight: 1000, color: "#0A0A0A", lineHeight: 1.35 }}>{p.text || "—"}</div>
+                                <div className="subtle" style={{ marginTop: 8, display: "flex", gap: 14 }}>
+                                  <span>❤️ {formatInt(p.likes)}</span>
+                                  <span>🔁 {formatInt(p.recasts)}</span>
+                                  <span>💬 {formatInt(p.replies)}</span>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+          ) : null}
+        </>
+      )}
+
+      {/* Support (always visible) */}
       <div style={{ marginTop: 22 }}>
         <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Support the builder</div>
         <div className="subtle" style={{ marginTop: 4 }}>
@@ -620,20 +608,10 @@ export default function ProfileDashboardClient({ address }: { address?: `0x${str
 
         <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.92)" }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => setAsset("USDC")}
-              className={asset === "USDC" ? "btn btnPrimary" : "btn"}
-              style={{ borderRadius: 999 }}
-            >
+            <button type="button" onClick={() => setAsset("USDC")} className={asset === "USDC" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
               USDC
             </button>
-            <button
-              type="button"
-              onClick={() => setAsset("ETH")}
-              className={asset === "ETH" ? "btn btnPrimary" : "btn"}
-              style={{ borderRadius: 999 }}
-            >
+            <button type="button" onClick={() => setAsset("ETH")} className={asset === "ETH" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
               ETH
             </button>
           </div>
@@ -661,14 +639,7 @@ export default function ProfileDashboardClient({ address }: { address?: `0x${str
                   onChange={(e) => setUsdcAmount(clampAmountString(e.target.value, 6))}
                   inputMode="decimal"
                   placeholder="1"
-                  style={{
-                    flex: 1,
-                    borderRadius: 14,
-                    border: "1px solid rgba(0,0,0,0.12)",
-                    padding: "10px 12px",
-                    fontWeight: 1000,
-                    outline: "none",
-                  }}
+                  style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
                 />
                 <div style={{ fontSize: 12, fontWeight: 1000 }}>USDC</div>
               </div>
@@ -681,27 +652,14 @@ export default function ProfileDashboardClient({ address }: { address?: `0x${str
                 onChange={(e) => setEthAmount(clampAmountString(e.target.value, 18))}
                 inputMode="decimal"
                 placeholder="0.001"
-                style={{
-                  flex: 1,
-                  borderRadius: 14,
-                  border: "1px solid rgba(0,0,0,0.12)",
-                  padding: "10px 12px",
-                  fontWeight: 1000,
-                  outline: "none",
-                }}
+                style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
               />
               <div style={{ fontSize: 12, fontWeight: 1000 }}>ETH</div>
             </div>
           )}
 
           <div style={{ marginTop: 14 }}>
-            <button
-              type="button"
-              onClick={sendSupport}
-              className="btn btnPrimary"
-              disabled={ethPending || usdcPending}
-              style={{ width: "100%", height: 44 }}
-            >
+            <button type="button" onClick={sendSupport} className="btn btnPrimary" disabled={ethPending || usdcPending} style={{ width: "100%", height: 44 }}>
               {ethPending || usdcPending ? "Sending…" : "Send support"}
             </button>
           </div>
@@ -714,14 +672,7 @@ export default function ProfileDashboardClient({ address }: { address?: `0x${str
           </div>
 
           {supportMsg ? (
-            <div
-              style={{
-                marginTop: 10,
-                fontSize: 13,
-                fontWeight: 900,
-                color: supportMsg.startsWith("✅") ? "#065F46" : "#6B7280",
-              }}
-            >
+            <div style={{ marginTop: 10, fontSize: 13, fontWeight: 900, color: supportMsg.startsWith("✅") ? "#065F46" : "#6B7280" }}>
               {supportMsg}
             </div>
           ) : null}
