@@ -1,722 +1,783 @@
-'use client';
+"use client";
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { sdk as miniappSdk } from '@farcaster/miniapp-sdk';
-import { ConnectWallet } from '@coinbase/onchainkit/wallet';
-import { useAccount, useSendTransaction, useSwitchChain, useWriteContract } from 'wagmi';
-import { base } from 'wagmi/chains';
-import { parseEther } from 'viem';
+import React, { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
+import { useMiniKit } from "@coinbase/onchainkit/minikit";
+import { useSendTransaction, useSwitchChain, useWriteContract } from "wagmi";
+import { base } from "viem/chains";
+import { erc20Abi, parseEther, parseUnits } from "viem";
+import CopyButton from "@/components/CopyButton";
 
-type FarcasterUserProfile = {
+type FarcasterUser = {
   fid: number;
   username: string;
-  display_name?: string;
-  pfp_url?: string;
-  profile?: { bio?: { text?: string } };
-  follower_count?: number;
-  following_count?: number;
-  score?: number;
+  display_name: string;
+  pfp_url: string;
+  follower_count: number;
+  following_count: number;
+  score: number;
+  // NOTE: exists in payload, but we intentionally DO NOT render it on profile
+  bio?: string;
+};
+
+type RewardSummary = {
+  all_time_usdc: number;
+  earning_weeks: number;
+  latest_week_label: string;
+  latest_week_usdc: number;
+  prev_week_label: string;
+  prev_week_usdc: number;
+  latest_week_start_utc: string; // ISO string (UTC)
+};
+
+type RewardHistory = {
+  week_number: number;
+  week_label: string;
+  week_start_utc: string;
+  usdc: number;
 };
 
 type ProfilePayload = {
-  address: string;
-  farcaster_user: FarcasterUserProfile | null;
-  reward_summary: {
-    latest_week_start_utc: string;
-    latest_week_label: string;
-    all_time_usdc: string;
-    earning_weeks: number;
-    latest_week_usdc: string;
-    prev_week_usdc: string;
-    prev_week_label: string;
-    change_usdc: string;
-    weeks: Array<{ week_start_utc: string; week_label: string; usdc: string }>;
-  };
+  address: `0x${string}`;
+  farcaster_user: FarcasterUser | null;
+  reward_summary: RewardSummary;
+  reward_history: RewardHistory[];
+  source?: "store" | "neynar" | "none";
 };
 
-type SocialMetrics = {
+type SocialPost = {
+  hash: string;
+  text: string;
+  created_at: string;
+  likes: number;
+  recasts: number;
+  replies: number;
+};
+
+type SocialPayload = {
   casts: number;
   likes: number;
   recasts: number;
   replies: number;
-  top_posts: Array<{ text: string; likes: number; recasts: number; replies: number }>;
+  top_posts: SocialPost[];
 };
 
-const SUPPORT_BUILDER_ADDRESS = '0xd4a1D777e2882487d47c96bc23A47CeaB4f4f18A' as const;
+// ===== Support config =====
+const BUILDER_ADDRESS = "0xd4a1D777e2882487d47c96bc23A47CeaB4f4f18A" as const;
+const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const; // Base USDC (6 decimals)
+const USDC_PRESETS = [0.5, 1, 2, 5, 10];
 
-// Base USDC (6 decimals)
-const BASE_USDC_ADDRESS = '0x833589fCD6eDB6E08f4c7C32D4f71b54bDA02913' as const;
-
-const ERC20_ABI = [
-  {
-    type: 'function',
-    name: 'transfer',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'to', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [{ name: 'ok', type: 'bool' }],
-  },
-] as const;
-
-function formatUSDC(usdcString: string) {
-  const n = Number(usdcString);
-  if (!Number.isFinite(n)) return usdcString;
-  return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+function formatUsd(n: number) {
+  const v = Number.isFinite(n) ? n : 0;
+  try {
+    return `$${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(v)}`;
+  } catch {
+    return `$${v}`;
+  }
 }
-
-function toUtcStartIso(yyyyMmDd: string) {
-  return `${yyyyMmDd}T00:00:00.000Z`;
+function formatInt(n: number) {
+  const v = Number.isFinite(n) ? n : 0;
+  try {
+    return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(v);
+  } catch {
+    return `${v}`;
+  }
 }
-
-function addDaysIso(iso: string, days: number) {
-  const d = new Date(iso);
-  d.setUTCDate(d.getUTCDate() + days);
+function clampAmountString(v: string, maxDecimals: number) {
+  const cleaned = v.replace(/[^\d.]/g, "");
+  const parts = cleaned.split(".");
+  if (parts.length <= 1) return cleaned;
+  const head = parts[0];
+  const tail = parts.slice(1).join("").slice(0, maxDecimals);
+  return `${head}.${tail}`;
+}
+function toIsoUtc(d: Date) {
   return d.toISOString();
 }
-
-type Json = Record<string, unknown>;
-
-function isObj(v: unknown): v is Json {
-  return typeof v === 'object' && v !== null;
+function prettyWindowLabel(startIso: string, endIso: string) {
+  const s = new Date(startIso);
+  const e = new Date(endIso);
+  const pad = (x: number) => String(x).padStart(2, "0");
+  const fmt = (dt: Date) => `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
+  return `[${fmt(s)} → ${fmt(e)}]`;
 }
 
-function get(v: unknown, key: string): unknown {
-  return isObj(v) ? v[key] : undefined;
+function Pill({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon?: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "10px 12px",
+        borderRadius: 999,
+        border: "1px solid rgba(0,0,0,0.08)",
+        background: "rgba(245,248,255,0.95)",
+        fontWeight: 900,
+        fontSize: 13,
+      }}
+    >
+      <span style={{ opacity: 0.8 }}>{icon ?? null}</span>
+      <span style={{ opacity: 0.7 }}>{label}:</span>
+      <span style={{ color: "#0A0A0A" }}>{value}</span>
+    </div>
+  );
 }
 
-function fmtWindow(startIso: string, endIso: string) {
-  const s = startIso.slice(0, 10);
-  const e = endIso.slice(0, 10);
-  return `[${s} → ${e}]`;
+function SoftStatCard({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+}) {
+  return (
+    <div
+      className="card"
+      style={{
+        padding: 16,
+        borderRadius: 18,
+        background: "rgba(255,255,255,0.80)",
+        border: "1px solid rgba(0,0,0,0.08)",
+        boxShadow: "0 12px 28px rgba(0,0,0,0.06)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 14,
+            display: "grid",
+            placeItems: "center",
+            background: "rgba(0,0,255,0.08)",
+            border: "1px solid rgba(0,0,255,0.18)",
+          }}
+        >
+          {icon}
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 1000, color: "rgba(0,0,0,0.55)" }}>{label}</div>
+          <div style={{ fontSize: 24, fontWeight: 1100, color: "#0A0A0A", marginTop: 2 }}>{formatInt(value)}</div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function buildShareText(appUrl: string) {
-  return `I just checked my Baseapp weekly creator rewards dashboard, feeling based 💙\n\nCheck your statistics at Baseapp Reward Dashboard\n${appUrl}`;
-}
+export default function ProfileDashboardClient({ address }: { address: `0x${string}` }) {
+  const { context } = useMiniKit();
+  const inBaseApp = Boolean(context);
 
-function safeTrim(s: string, max = 140) {
-  const t = (s || '').replace(/\s+/g, ' ').trim();
-  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
-}
-
-export default function ProfileDashboardClient() {
-  const { address, isConnected, chainId } = useAccount();
-  const { switchChainAsync, isPending: isSwitching } = useSwitchChain();
-
-  const [isMiniApp, setIsMiniApp] = useState(false);
-  const [fid, setFid] = useState<number | null>(null);
-
+  // ===== Data state =====
   const [profile, setProfile] = useState<ProfilePayload | null>(null);
   const [profileErr, setProfileErr] = useState<string | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
 
-  const [socialCurrent, setSocialCurrent] = useState<SocialMetrics | null>(null);
-  const [socialLastWindow, setSocialLastWindow] = useState<SocialMetrics | null>(null);
+  const [socialCurrent, setSocialCurrent] = useState<SocialPayload | null>(null);
+  const [socialLast, setSocialLast] = useState<SocialPayload | null>(null);
   const [socialErr, setSocialErr] = useState<string | null>(null);
   const [socialLoading, setSocialLoading] = useState(false);
 
-  const [downloadOpen, setDownloadOpen] = useState(false);
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-  const [downloadBusy, setDownloadBusy] = useState(false);
-  const [copyOk, setCopyOk] = useState(false);
+  // ===== Support state =====
+  const [asset, setAsset] = useState<"USDC" | "ETH">("USDC"); // default USDC
+  const [usdcAmount, setUsdcAmount] = useState<string>("1");
+  const [ethAmount, setEthAmount] = useState<string>("0.001");
+  const [supportMsg, setSupportMsg] = useState<string | null>(null);
 
-  // Support tx state
-  const [supportMode, setSupportMode] = useState<'usdc' | 'eth'>('usdc');
-  const [customEth, setCustomEth] = useState('0.001');
-  const [supportStatus, setSupportStatus] = useState<string | null>(null);
+  const { switchChainAsync } = useSwitchChain();
+  const { sendTransactionAsync, isPending: ethPending } = useSendTransaction();
+  const { writeContractAsync, isPending: usdcPending } = useWriteContract();
 
-  const writeContract = useWriteContract();
-  const sendTx = useSendTransaction();
-
-  const appUrl = useMemo(() => {
-    return (
-      process.env.NEXT_PUBLIC_APP_URL ||
-      (typeof window !== 'undefined' ? window.location.origin : 'https://baseapp-reward-dashboard.vercel.app')
-    );
-  }, []);
-
-  // ✅ FIX #1: sdk.context is a Promise in your version (not a function)
+  // ===== Load Profile (uses store first, Neynar for missing users) =====
   useEffect(() => {
-    miniappSdk.context
-      .then((ctx: unknown) => {
-        setIsMiniApp(true);
+    let alive = true;
 
-        const user = get(ctx, 'user');
-        const client = get(ctx, 'client');
+    async function run() {
+      setProfile(null);
+      setProfileErr(null);
+      setProfileLoading(true);
 
-        const fidMaybe =
-          get(user, 'fid') ??
-          get(client, 'fid') ??
-          get(client, 'clientFid') ??
-          get(get(client, 'farcasterUser'), 'fid');
-
-        if (typeof fidMaybe === 'number' && fidMaybe > 0) setFid(fidMaybe);
-      })
-      .catch(() => {
-        setIsMiniApp(false);
-      });
-  }, []);
-
-  useEffect(() => {
-    if (!address) return;
-
-    let cancelled = false;
-    setProfileLoading(true);
-    setProfileErr(null);
-
-    fetch(`/api/profile?address=${encodeURIComponent(address)}&resolve=1`, { cache: 'no-store' })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(await r.text());
-        return (await r.json()) as ProfilePayload;
-      })
-      .then((p) => {
-        if (cancelled) return;
-        setProfile(p);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setProfile(null);
-        setProfileErr('Profile data unavailable right now.');
-      })
-      .finally(() => {
-        if (cancelled) return;
+      try {
+        const res = await fetch(`/api/profile?address=${address}&resolve=1`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`Profile API failed (${res.status})`);
+        const json = (await res.json()) as ProfilePayload;
+        if (!alive) return;
+        setProfile(json);
+      } catch (e: any) {
+        if (!alive) return;
+        setProfileErr(e?.message ?? "Failed to load profile");
+      } finally {
+        if (!alive) return;
         setProfileLoading(false);
-      });
+      }
+    }
 
+    run();
     return () => {
-      cancelled = true;
+      alive = false;
     };
   }, [address]);
 
+  const latestWeekStartIso = profile?.reward_summary?.latest_week_start_utc ?? null;
+
+  const currentWindow = useMemo(() => {
+    if (!latestWeekStartIso) return null;
+    const start = new Date(latestWeekStartIso);
+    const end = new Date();
+    return { startIso: toIsoUtc(start), endIso: toIsoUtc(end) };
+  }, [latestWeekStartIso]);
+
+  const lastRewardWindow = useMemo(() => {
+    if (!latestWeekStartIso) return null;
+    const end = new Date(latestWeekStartIso);
+    const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return { startIso: toIsoUtc(start), endIso: toIsoUtc(end) };
+  }, [latestWeekStartIso]);
+
+  // ===== Load Social (2 blocks) =====
   useEffect(() => {
-    if (!fid || !profile?.reward_summary?.latest_week_start_utc) return;
+    let alive = true;
 
-    const latestStartIso = toUtcStartIso(profile.reward_summary.latest_week_start_utc);
-    const lastWindowStart = addDaysIso(latestStartIso, -7);
-    const lastWindowEnd = latestStartIso;
+    async function run() {
+      setSocialCurrent(null);
+      setSocialLast(null);
+      setSocialErr(null);
 
-    const currentStart = latestStartIso;
-    const currentEnd = new Date().toISOString();
+      const fid = profile?.farcaster_user?.fid ?? null;
+      if (!fid || !currentWindow || !lastRewardWindow) return;
 
-    let cancelled = false;
-    setSocialLoading(true);
-    setSocialErr(null);
-
-    const fetchWindow = async (startIso: string, endIso: string, includeTopPosts: boolean) => {
-      const u = new URL('/api/social', window.location.origin);
-      u.searchParams.set('fid', String(fid));
-      u.searchParams.set('start', startIso);
-      u.searchParams.set('end', endIso);
-      u.searchParams.set('includeTopPosts', includeTopPosts ? '1' : '0');
-      const r = await fetch(u.toString(), { cache: 'no-store' });
-      if (!r.ok) throw new Error(await r.text());
-      return (await r.json()) as SocialMetrics;
-    };
-
-    Promise.all([
-      // Current social activity: NO top posts
-      fetchWindow(currentStart, currentEnd, false),
-      // Last reward window: top posts allowed
-      fetchWindow(lastWindowStart, lastWindowEnd, true),
-    ])
-      .then(([cur, last]) => {
-        if (cancelled) return;
-        setSocialCurrent(cur);
-        setSocialLastWindow(last);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSocialCurrent(null);
-        setSocialLastWindow(null);
-        setSocialErr(
-          'I’m sorry — the Social section is temporarily unavailable (API quota or network issue). If I receive support from the Base team for API costs, this section will be live again.'
+      setSocialLoading(true);
+      try {
+        // Current window (NO top posts)
+        const r1 = await fetch(
+          `/api/social?fid=${fid}&start=${encodeURIComponent(currentWindow.startIso)}&end=${encodeURIComponent(
+            currentWindow.endIso
+          )}&includeTopPosts=0`,
+          { cache: "no-store" }
         );
-      })
-      .finally(() => {
-        if (cancelled) return;
+        if (!r1.ok) throw new Error(`Social(current) failed (${r1.status})`);
+        const j1 = (await r1.json()) as SocialPayload;
+
+        // Last reward window (keep top posts)
+        const r2 = await fetch(
+          `/api/social?fid=${fid}&start=${encodeURIComponent(lastRewardWindow.startIso)}&end=${encodeURIComponent(
+            lastRewardWindow.endIso
+          )}&includeTopPosts=1`,
+          { cache: "no-store" }
+        );
+        if (!r2.ok) throw new Error(`Social(last window) failed (${r2.status})`);
+        const j2 = (await r2.json()) as SocialPayload;
+
+        if (!alive) return;
+        setSocialCurrent(j1);
+        setSocialLast(j2);
+      } catch (e: any) {
+        if (!alive) return;
+        setSocialErr(e?.message ?? "Failed to load social stats");
+      } finally {
+        if (!alive) return;
         setSocialLoading(false);
-      });
+      }
+    }
 
+    run();
     return () => {
-      cancelled = true;
+      alive = false;
     };
-  }, [fid, profile?.reward_summary?.latest_week_start_utc]);
+  }, [profile?.farcaster_user?.fid, currentWindow, lastRewardWindow]);
 
-  const shareParams = useMemo(() => {
-    if (!profile) return null;
-
-    const origin =
-      typeof window === 'undefined' ? 'https://baseapp-reward-dashboard.vercel.app' : window.location.origin;
-
-    const u = new URL('/share', origin);
-    const user = profile.farcaster_user;
-
-    if (user?.display_name) u.searchParams.set('name', user.display_name);
-    if (user?.username) u.searchParams.set('username', `@${user.username}`);
-    if (user?.pfp_url) u.searchParams.set('pfp', user.pfp_url);
-
-    u.searchParams.set('allTime', `$${formatUSDC(profile.reward_summary.all_time_usdc)}`);
-    u.searchParams.set('weeks', String(profile.reward_summary.earning_weeks));
-    u.searchParams.set('latestLabel', profile.reward_summary.latest_week_label);
-    u.searchParams.set('latestUsdc', `$${formatUSDC(profile.reward_summary.latest_week_usdc)}`);
-
-    return {
-      sharePageUrl: u.toString(),
-      ogImageUrl: new URL(`/api/og?${u.searchParams.toString()}`, u.origin).toString(),
-    };
-  }, [profile]);
-
-  async function copyShareText() {
+  async function ensureBase() {
+    // Base App wallet usually is already on Base, but we handle it safely.
     try {
-      await navigator.clipboard.writeText(buildShareText(appUrl));
-      setCopyOk(true);
-      setTimeout(() => setCopyOk(false), 1200);
+      await switchChainAsync?.({ chainId: base.id });
     } catch {
-      // ignore
+      // If switchChain fails (some wallets), we still try to send and let wallet handle network prompt.
     }
   }
 
-  async function openDownload() {
-    if (!shareParams?.ogImageUrl) return;
-    setDownloadOpen(true);
-    setDownloadBusy(true);
-    setDownloadUrl(null);
+  async function sendSupport() {
+    setSupportMsg(null);
 
     try {
-      const r = await fetch(shareParams.ogImageUrl, { cache: 'no-store' });
-      if (!r.ok) throw new Error();
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      setDownloadUrl(url);
-    } catch {
-      setDownloadUrl(shareParams.ogImageUrl);
-    } finally {
-      setDownloadBusy(false);
-    }
-  }
+      await ensureBase();
 
-  function closeDownload() {
-    setDownloadOpen(false);
-    if (downloadUrl?.startsWith('blob:')) URL.revokeObjectURL(downloadUrl);
-    setDownloadUrl(null);
-  }
+      if (asset === "ETH") {
+        const amt = ethAmount.trim();
+        if (!amt || Number(amt) <= 0) throw new Error("Enter an ETH amount");
+        await sendTransactionAsync({
+          to: BUILDER_ADDRESS,
+          value: parseEther(amt),
+          chainId: base.id,
+        });
+        setSupportMsg("✅ ETH sent. Thank you!");
+        return;
+      }
 
-  async function shareOnBaseapp() {
-    if (!shareParams) return;
+      // USDC
+      const amt = usdcAmount.trim();
+      if (!amt || Number(amt) <= 0) throw new Error("Select or enter a USDC amount");
 
-    const text = `I just checked my Baseapp weekly creator rewards dashboard, feeling based 💙\n\nCheck your statistics at Baseapp Reward Dashboard`;
-
-    // ✅ FIX #2: embeds must be a tuple, not string[]
-    const embeds: [string, string] = [shareParams.sharePageUrl, appUrl];
-
-    try {
-      await miniappSdk.actions.composeCast({ text, embeds });
-    } catch {
-      await copyShareText();
-    }
-  }
-
-  async function ensureBaseChain() {
-    if (chainId === base.id) return true;
-    try {
-      await switchChainAsync({ chainId: base.id });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function sendUsdc(amountUsd: number) {
-    if (!isConnected || !address) return;
-    setSupportStatus(null);
-
-    const okChain = await ensureBaseChain();
-    if (!okChain) {
-      setSupportStatus('Please switch to Base to send support.');
-      return;
-    }
-
-    // USDC has 6 decimals
-    const raw = BigInt(Math.round(amountUsd * 1_000_000));
-
-    try {
-      await writeContract.writeContractAsync({
-        address: BASE_USDC_ADDRESS,
-        abi: ERC20_ABI,
-        functionName: 'transfer',
-        args: [SUPPORT_BUILDER_ADDRESS, raw],
+      await writeContractAsync({
+        address: BASE_USDC,
+        abi: erc20Abi,
+        functionName: "transfer",
+        args: [BUILDER_ADDRESS, parseUnits(amt, 6)],
+        chainId: base.id,
       });
-      setSupportStatus(`Sent $${amountUsd.toFixed(2)} USDC support ✅`);
-    } catch {
-      setSupportStatus('Transaction failed or rejected.');
+
+      setSupportMsg("✅ USDC sent. Thank you!");
+    } catch (e: any) {
+      setSupportMsg(e?.shortMessage ?? e?.message ?? "Transaction failed or rejected.");
     }
   }
 
-  async function sendEthCustom() {
-    if (!isConnected || !address) return;
-    setSupportStatus(null);
-
-    const okChain = await ensureBaseChain();
-    if (!okChain) {
-      setSupportStatus('Please switch to Base to send support.');
-      return;
-    }
-
-    const v = Number(customEth);
-    if (!Number.isFinite(v) || v <= 0) {
-      setSupportStatus('Enter a valid ETH amount.');
-      return;
-    }
-
-    try {
-      await sendTx.sendTransactionAsync({
-        to: SUPPORT_BUILDER_ADDRESS,
-        value: parseEther(customEth),
-      });
-      setSupportStatus(`Sent ${customEth} ETH support ✅`);
-    } catch {
-      setSupportStatus('Transaction failed or rejected.');
-    }
-  }
-
-  if (!isMiniApp) {
-    return (
-      <div className="page" style={{ paddingBottom: 24 }}>
-        <div className="card card-pad" style={{ border: '2px solid #0000FF' }}>
-          <div style={{ fontWeight: 900, color: '#0000FF', marginBottom: 8 }}>Open inside Base App</div>
-          <div className="subtle" style={{ marginBottom: 12 }}>
-            Open this app inside Base as a Mini App to see your profile automatically.
-          </div>
-          <ConnectWallet />
-        </div>
-      </div>
-    );
-  }
+  // ===== Render helpers =====
+  const u = profile?.farcaster_user ?? null;
+  const rs = profile?.reward_summary ?? null;
+  const rh = profile?.reward_history ?? [];
 
   return (
-    <div className="page" style={{ paddingBottom: 24 }}>
-      {/* Profile header */}
-      <div className="card card-pad" style={{ padding: 12 }}>
-        {profileLoading ? (
-          <div className="subtle">Loading profile…</div>
-        ) : profileErr ? (
-          <div className="subtle">{profileErr}</div>
-        ) : profile ? (
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <div
-              style={{
-                width: 56,
-                height: 56,
-                borderRadius: 16,
-                overflow: 'hidden',
-                background: '#e4e4e4',
-                border: '1px solid rgba(0,0,255,0.25)',
-                flexShrink: 0,
-              }}
-            >
-              {profile.farcaster_user?.pfp_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={profile.farcaster_user.pfp_url}
-                  alt=""
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                />
-              ) : null}
-            </div>
-
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 900, fontSize: 16, color: '#0A0A0A' }}>
-                {profile.farcaster_user?.display_name || profile.farcaster_user?.username || 'User'}
-              </div>
-              <div style={{ marginTop: 2, fontWeight: 900, color: '#0000FF' }}>
-                {profile.farcaster_user?.username ? `@${profile.farcaster_user.username}` : ''}
-              </div>
-              <div className="subtle" style={{ marginTop: 6 }}>
-                {safeTrim(profile.farcaster_user?.profile?.bio?.text || '', 140)}
-              </div>
-
-              <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <Pill label="Score" value={(profile.farcaster_user?.score ?? 0).toFixed(2)} />
-                <Pill label="FID" value={String(profile.farcaster_user?.fid ?? '')} />
-                <Pill label="Following" value={String(profile.farcaster_user?.following_count ?? 0)} />
-                <Pill label="Followers" value={String(profile.farcaster_user?.follower_count ?? 0)} />
-              </div>
-            </div>
+    <div style={{ paddingBottom: 40 }}>
+      {!inBaseApp ? (
+        <div className="card card-pad" style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 1000, fontSize: 14 }}>Tip</div>
+          <div className="subtle" style={{ marginTop: 6 }}>
+            For the best experience, open this inside the <b>Base app</b> Miniapp.
           </div>
-        ) : null}
-      </div>
-
-      {/* Onchain cards */}
-      {profile ? (
-        <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <DeepCard title="All-time rewards" value={`$${formatUSDC(profile.reward_summary.all_time_usdc)}`} />
-          <DeepCard title="Earning weeks" value={String(profile.reward_summary.earning_weeks)} />
-          <DeepCard
-            title={profile.reward_summary.latest_week_label}
-            value={`$${formatUSDC(profile.reward_summary.latest_week_usdc)}`}
-          />
-          <DeepCard
-            title={profile.reward_summary.prev_week_label}
-            value={`$${formatUSDC(profile.reward_summary.prev_week_usdc)}`}
-          />
         </div>
       ) : null}
 
-      {/* Social cards */}
-      <div style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 900, color: '#0000FF', marginBottom: 8 }}>Social</div>
+      {/* ===== Profile header (Match Find style, but WITHOUT bio/copy/visit/change wallet) ===== */}
+      <div className="card card-pad">
+        {profileLoading ? (
+          <div style={{ height: 70, borderRadius: 16, background: "rgba(0,0,0,0.06)" }} />
+        ) : profileErr ? (
+          <div style={{ color: "#B91C1C", fontWeight: 1000 }}>{profileErr}</div>
+        ) : !profile ? null : (
+          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+            <Image
+              src={u?.pfp_url || "/icon.png"}
+              alt="pfp"
+              width={72}
+              height={72}
+              style={{
+                borderRadius: 18,
+                border: "1px solid rgba(0,0,0,0.10)",
+                background: "rgba(0,0,0,0.03)",
+              }}
+            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: 20,
+                  fontWeight: 1100,
+                  color: "#0A0A0A",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {u?.display_name || u?.username || "Unknown"}
+              </div>
+              <div
+                style={{
+                  marginTop: 2,
+                  color: "#0000FF",
+                  fontWeight: 1000,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                @{u?.username || "unknown"}
+              </div>
 
-        {socialLoading ? (
-          <div className="card card-pad">Loading social…</div>
-        ) : socialErr ? (
-          <div className="card card-pad" style={{ border: '1px solid rgba(0,0,255,0.25)' }}>
-            <div className="subtle">{socialErr}</div>
+              <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 8 }}>
+                <Pill label="Score" value={(u?.score ?? 0).toFixed(2)} icon={<span>🪐</span>} />
+                <Pill label="FID" value={formatInt(u?.fid ?? 0)} icon={<span>🆔</span>} />
+                <Pill label="Following" value={formatInt(u?.following_count ?? 0)} icon={<span>➕</span>} />
+                <Pill label="Followers" value={formatInt(u?.follower_count ?? 0)} icon={<span>👥</span>} />
+              </div>
+            </div>
           </div>
-        ) : (
-          <>
-            {/* Current social activity (no top posts) */}
-            {profile ? (
-              <div className="card card-pad" style={{ marginBottom: 10 }}>
-                <div style={{ fontWeight: 900, color: '#0A0A0A' }}>Current social activity</div>
-                <div className="subtle" style={{ marginTop: 2 }}>
-                  {fmtWindow(toUtcStartIso(profile.reward_summary.latest_week_start_utc), new Date().toISOString())}
-                </div>
-
-                <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <FloatStat title="Casts" value={socialCurrent?.casts ?? 0} emoji="📝" />
-                  <FloatStat title="Likes" value={socialCurrent?.likes ?? 0} emoji="❤️" />
-                  <FloatStat title="Recasts" value={socialCurrent?.recasts ?? 0} emoji="🔁" />
-                  <FloatStat title="Replies" value={socialCurrent?.replies ?? 0} emoji="💬" />
-                </div>
-              </div>
-            ) : null}
-
-            {/* Last reward window (can include top posts) */}
-            {profile ? (
-              <div className="card card-pad">
-                <div style={{ fontWeight: 900, color: '#0A0A0A' }}>Social activity of last reward window</div>
-                <div className="subtle" style={{ marginTop: 2 }}>
-                  {fmtWindow(
-                    addDaysIso(toUtcStartIso(profile.reward_summary.latest_week_start_utc), -7),
-                    toUtcStartIso(profile.reward_summary.latest_week_start_utc)
-                  )}
-                </div>
-
-                <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <FloatStat title="Casts" value={socialLastWindow?.casts ?? 0} emoji="📝" />
-                  <FloatStat title="Likes" value={socialLastWindow?.likes ?? 0} emoji="❤️" />
-                  <FloatStat title="Recasts" value={socialLastWindow?.recasts ?? 0} emoji="🔁" />
-                  <FloatStat title="Replies" value={socialLastWindow?.replies ?? 0} emoji="💬" />
-                </div>
-
-                {socialLastWindow?.top_posts?.length ? (
-                  <div style={{ marginTop: 12 }}>
-                    <div style={{ fontWeight: 900, color: '#0000FF', marginBottom: 8 }}>Top posts</div>
-                    <div style={{ display: 'grid', gap: 8 }}>
-                      {socialLastWindow.top_posts.slice(0, 7).map((p, idx) => (
-                        <div
-                          key={idx}
-                          style={{ border: '1px solid rgba(10,10,10,0.08)', borderRadius: 12, padding: 10 }}
-                        >
-                          <div style={{ fontWeight: 900, color: '#0A0A0A' }}>{safeTrim(p.text, 180)}</div>
-                          <div className="subtle" style={{ marginTop: 6 }}>
-                            ❤️ {p.likes} · 🔁 {p.recasts} · 💬 {p.replies}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </>
         )}
       </div>
 
-      {/* Share */}
-      <div style={{ marginTop: 14 }} className="card card-pad">
-        <div style={{ fontWeight: 900, color: '#0000FF', marginBottom: 8 }}>Share your stats</div>
+      {/* ===== Onchain rewards (same structure as Find) ===== */}
+      {profile ? (
+        <div style={{ marginTop: 18 }}>
+          <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Onchain rewards</div>
+          <div className="subtle" style={{ marginTop: 4 }}>
+            Your Base app weekly reward stats
+          </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-          <button className="btn" style={{ height: 48, padding: '0 10px' }} onClick={() => void openDownload()}>
-            Download image
-          </button>
-          <button className="btn" style={{ height: 48, padding: '0 10px' }} onClick={() => void copyShareText()}>
-            {copyOk ? 'Copied ✅' : 'Copy text'}
-          </button>
-          <button className="btn" style={{ height: 48, padding: '0 10px' }} onClick={() => void shareOnBaseapp()}>
-            Share on Baseapp
-          </button>
-        </div>
-
-        {downloadOpen ? (
-          <div
-            style={{
-              marginTop: 12,
-              border: '1px solid rgba(10,10,10,0.12)',
-              borderRadius: 14,
-              padding: 10,
-              background: '#e4e4e4',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-              <div style={{ fontWeight: 900 }}>Share image</div>
-              <button className="btn" style={{ height: 26, padding: '0 10px' }} onClick={closeDownload}>
-                Close
-              </button>
+          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div
+              className="card"
+              style={{
+                padding: 16,
+                borderRadius: 18,
+                background: "#0000FF",
+                color: "white",
+                boxShadow: "0 18px 40px rgba(0,0,255,0.20)",
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>All-time rewards</div>
+              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
+                {formatUsd(rs?.all_time_usdc ?? 0)}
+              </div>
             </div>
 
-            {downloadBusy ? (
-              <div className="subtle" style={{ marginTop: 10 }}>
-                Preparing image…
-              </div>
-            ) : downloadUrl ? (
-              <div style={{ marginTop: 10 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={downloadUrl} alt="share" style={{ width: '100%', borderRadius: 12 }} />
-                <a
-                  href={downloadUrl}
-                  download="baseapp-reward-dashboard.png"
-                  className="btn"
-                  style={{ display: 'inline-flex', marginTop: 10, height: 26, padding: '0 10px' }}
-                >
-                  Download now
-                </a>
-              </div>
-            ) : (
-              <div className="subtle" style={{ marginTop: 10 }}>
-                Image unavailable.
-              </div>
-            )}
-          </div>
-        ) : null}
-      </div>
-
-      {/* Support */}
-      <div style={{ marginTop: 14 }} className="card card-pad">
-        <div style={{ fontWeight: 900, color: '#0000FF', marginBottom: 8 }}>Support the builder</div>
-        <div className="subtle" style={{ marginBottom: 10 }}>
-          This sends funds directly from your wallet to the builder address (you will confirm in your wallet).
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-          <button className="btn" style={{ height: 26, padding: '0 10px' }} onClick={() => setSupportMode('usdc')}>
-            USDC
-          </button>
-          <button className="btn" style={{ height: 26, padding: '0 10px' }} onClick={() => setSupportMode('eth')}>
-            ETH
-          </button>
-        </div>
-
-        {supportMode === 'usdc' ? (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: 8 }}>
-            {[0.5, 1, 2, 5, 10].map((v) => (
-              <button
-                key={v}
-                className="btn"
-                style={{ height: 26, padding: '0 10px', fontWeight: 900 }}
-                onClick={() => void sendUsdc(v)}
-                disabled={isSwitching}
-              >
-                ${v}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              value={customEth}
-              onChange={(e) => setCustomEth(e.target.value)}
+            <div
+              className="card"
               style={{
-                flex: 1,
-                border: '1px solid rgba(10,10,10,0.2)',
-                borderRadius: 12,
-                padding: '8px 10px',
-                fontWeight: 800,
+                padding: 16,
+                borderRadius: 18,
+                background: "#0000FF",
+                color: "white",
+                boxShadow: "0 18px 40px rgba(0,0,255,0.20)",
               }}
-              placeholder="0.001"
-            />
-            <button
-              className="btn"
-              style={{ height: 26, padding: '0 10px' }}
-              onClick={() => void sendEthCustom()}
-              disabled={isSwitching}
             >
-              Send
-            </button>
+              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>Earning weeks</div>
+              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
+                {formatInt(rs?.earning_weeks ?? 0)}
+              </div>
+            </div>
+
+            <div
+              className="card"
+              style={{
+                padding: 16,
+                borderRadius: 18,
+                background: "#0000FF",
+                color: "white",
+                boxShadow: "0 18px 40px rgba(0,0,255,0.20)",
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>{rs?.latest_week_label || "Current week"}</div>
+              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
+                {formatUsd(rs?.latest_week_usdc ?? 0)}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, opacity: 0.9 }}>Current week</div>
+            </div>
+
+            <div
+              className="card"
+              style={{
+                padding: 16,
+                borderRadius: 18,
+                background: "#0000FF",
+                color: "white",
+                boxShadow: "0 18px 40px rgba(0,0,255,0.20)",
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>{rs?.prev_week_label || "Previous week"}</div>
+              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
+                {formatUsd(rs?.prev_week_usdc ?? 0)}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, opacity: 0.9 }}>Previous week</div>
+            </div>
           </div>
-        )}
 
-        {supportStatus ? (
-          <div className="subtle" style={{ marginTop: 10 }}>
-            {supportStatus}
+          {/* Weekly reward wins (restored) */}
+          <div style={{ marginTop: 18 }}>
+            <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Weekly reward wins</div>
+            <div className="subtle" style={{ marginTop: 4 }}>
+              Only weeks with rewards are shown
+            </div>
+
+            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+              {rh.slice(0, 12).map((w) => (
+                <div
+                  key={w.week_number}
+                  className="card"
+                  style={{
+                    padding: 12,
+                    borderRadius: 16,
+                    border: "1px solid rgba(0,0,0,0.10)",
+                    background: "rgba(255,255,255,0.92)",
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 1100, color: "#0000FF" }}>{w.week_label.split("–")[0].trim()}</div>
+                  <div style={{ fontSize: 18, fontWeight: 1200, marginTop: 6 }}>{formatUsd(w.usdc)}</div>
+                  <div className="subtle" style={{ marginTop: 6, fontSize: 11 }}>
+                    {w.week_label.split("–").slice(1).join("–").trim()}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
+        </div>
+      ) : null}
 
-function Pill({ label, value }: { label: string; value: string }) {
-  return (
-    <div
-      style={{
-        height: 26,
-        borderRadius: 999,
-        border: '1px solid rgba(0,0,255,0.25)',
-        background: 'rgba(165,210,255,0.26)',
-        padding: '0 10px',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-      }}
-    >
-      <div style={{ fontSize: 12, fontWeight: 900, color: '#6B7280' }}>{label}:</div>
-      <div style={{ fontSize: 12, fontWeight: 900, color: '#0A0A0A' }}>{value}</div>
-    </div>
-  );
-}
+      {/* ===== Social (keep; current block no top posts) ===== */}
+      {profile ? (
+        <div style={{ marginTop: 22 }}>
+          <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Social</div>
+          <div className="subtle" style={{ marginTop: 4 }}>
+            Engagement on your Farcaster posts
+          </div>
 
-function DeepCard({ title, value }: { title: string; value: string }) {
-  return (
-    <div style={{ borderRadius: 14, padding: 12, background: '#0000FF' }}>
-      <div style={{ fontSize: 12, fontWeight: 900, color: '#FFFFFF', opacity: 0.95 }}>{title}</div>
-      <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: '#FFFFFF' }}>{value}</div>
-    </div>
-  );
-}
+          {socialLoading ? (
+            <div className="card card-pad" style={{ marginTop: 12 }}>
+              <div className="subtle">Loading social…</div>
+            </div>
+          ) : socialErr ? (
+            <div className="card card-pad" style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 1000, color: "#B91C1C" }}>Social load failed</div>
+              <div className="subtle" style={{ marginTop: 6 }}>{socialErr}</div>
+            </div>
+          ) : (
+            <>
+              {socialCurrent && currentWindow ? (
+                <div
+                  className="card card-pad"
+                  style={{
+                    marginTop: 12,
+                    background: "linear-gradient(180deg, rgba(245,248,255,0.92) 0%, rgba(255,255,255,0.90) 100%)",
+                    border: "1px solid rgba(0,0,0,0.08)",
+                    boxShadow: "0 16px 40px rgba(0,0,0,0.06)",
+                  }}
+                >
+                  <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Current social activity</div>
+                  <div className="subtle" style={{ marginTop: 4 }}>
+                    {prettyWindowLabel(currentWindow.startIso, currentWindow.endIso)}
+                  </div>
 
-function FloatStat({ title, value, emoji }: { title: string; value: number; emoji: string }) {
-  return (
-    <div
-      style={{
-        borderRadius: 16,
-        padding: 12,
-        background: 'rgba(165,210,255,0.20)',
-        border: '1px solid rgba(0,0,255,0.16)',
-        boxShadow: '0 10px 25px rgba(0,0,0,0.04)',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>📝</span>} label="Casts" value={socialCurrent.casts} />
+                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>❤️</span>} label="Likes" value={socialCurrent.likes} />
+                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>🔁</span>} label="Recasts" value={socialCurrent.recasts} />
+                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>💬</span>} label="Replies" value={socialCurrent.replies} />
+                  </div>
+                </div>
+              ) : null}
+
+              {socialLast && lastRewardWindow ? (
+                <div
+                  className="card card-pad"
+                  style={{
+                    marginTop: 12,
+                    background: "rgba(245,248,255,0.78)",
+                    border: "1px solid rgba(0,0,0,0.08)",
+                  }}
+                >
+                  <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Social activity of last reward window</div>
+                  <div className="subtle" style={{ marginTop: 4 }}>
+                    {prettyWindowLabel(lastRewardWindow.startIso, lastRewardWindow.endIso)}
+                  </div>
+
+                  <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>📝</span>} label="Casts" value={socialLast.casts} />
+                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>❤️</span>} label="Likes" value={socialLast.likes} />
+                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>🔁</span>} label="Recasts" value={socialLast.recasts} />
+                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>💬</span>} label="Replies" value={socialLast.replies} />
+                  </div>
+
+                  {/* Top posts only in last window (current window stays clean) */}
+                  <div style={{ marginTop: 14 }}>
+                    <div style={{ fontWeight: 1100, color: "#0A0A0A" }}>Top posts</div>
+                    <div className="subtle" style={{ marginTop: 4 }}>
+                      Top 7 posts in this window
+                    </div>
+
+                    <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                      {socialLast.top_posts.length === 0 ? (
+                        <div
+                          className="subtle"
+                          style={{
+                            padding: 12,
+                            borderRadius: 14,
+                            border: "1px solid rgba(0,0,0,0.08)",
+                            background: "rgba(255,255,255,0.8)",
+                          }}
+                        >
+                          No posts found in this timeframe.
+                        </div>
+                      ) : (
+                        socialLast.top_posts.map((p) => (
+                          <div
+                            key={p.hash}
+                            className="card"
+                            style={{
+                              padding: 14,
+                              borderRadius: 16,
+                              border: "1px solid rgba(0,0,0,0.08)",
+                              background: "rgba(255,255,255,0.92)",
+                            }}
+                          >
+                            <div style={{ fontWeight: 1000, color: "#0A0A0A", lineHeight: 1.35 }}>
+                              {p.text || "—"}
+                            </div>
+                            <div className="subtle" style={{ marginTop: 8, display: "flex", gap: 14, alignItems: "center" }}>
+                              <span>❤️ {formatInt(p.likes)}</span>
+                              <span>🔁 {formatInt(p.recasts)}</span>
+                              <span>💬 {formatInt(p.replies)}</span>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {/* ===== Support (USDC presets+custom, ETH custom) ===== */}
+      <div style={{ marginTop: 22 }}>
+        <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Support the builder</div>
+        <div className="subtle" style={{ marginTop: 4 }}>
+          Sends funds directly from your wallet → builder address. You confirm inside your wallet.
+        </div>
+
         <div
+          className="card card-pad"
           style={{
-            width: 26,
-            height: 26,
-            borderRadius: 10,
-            background: '#FFFFFF',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            marginTop: 12,
+            background: "linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(245,248,255,0.92) 100%)",
+            border: "1px solid rgba(0,0,0,0.08)",
+            boxShadow: "0 14px 38px rgba(0,0,0,0.06)",
           }}
         >
-          <span style={{ fontSize: 14 }}>{emoji}</span>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => setAsset("USDC")}
+              className={asset === "USDC" ? "btn btnPrimary" : "btn"}
+              style={{ borderRadius: 999 }}
+            >
+              USDC
+            </button>
+            <button
+              type="button"
+              onClick={() => setAsset("ETH")}
+              className={asset === "ETH" ? "btn btnPrimary" : "btn"}
+              style={{ borderRadius: 999 }}
+            >
+              ETH
+            </button>
+          </div>
+
+          {asset === "USDC" ? (
+            <>
+              <div style={{ marginTop: 12, fontWeight: 1000, color: "rgba(0,0,0,0.7)" }}>Choose amount</div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                {USDC_PRESETS.map((p) => {
+                  const active = Number(usdcAmount) === p;
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setUsdcAmount(String(p))}
+                      className={active ? "btn btnPrimary" : "btn"}
+                      style={{ borderRadius: 999, paddingInline: 14 }}
+                    >
+                      ${p}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 1000, color: "rgba(0,0,0,0.55)" }}>Custom</div>
+                <input
+                  value={usdcAmount}
+                  onChange={(e) => setUsdcAmount(clampAmountString(e.target.value, 6))}
+                  inputMode="decimal"
+                  placeholder="1"
+                  style={{
+                    flex: 1,
+                    borderRadius: 14,
+                    border: "1px solid rgba(0,0,0,0.12)",
+                    padding: "10px 12px",
+                    fontWeight: 1000,
+                    outline: "none",
+                    background: "rgba(255,255,255,0.92)",
+                  }}
+                />
+                <div style={{ fontSize: 12, fontWeight: 1000, color: "#0A0A0A" }}>USDC</div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ marginTop: 12, fontWeight: 1000, color: "rgba(0,0,0,0.7)" }}>Custom amount</div>
+              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
+                <input
+                  value={ethAmount}
+                  onChange={(e) => setEthAmount(clampAmountString(e.target.value, 18))}
+                  inputMode="decimal"
+                  placeholder="0.001"
+                  style={{
+                    flex: 1,
+                    borderRadius: 14,
+                    border: "1px solid rgba(0,0,0,0.12)",
+                    padding: "10px 12px",
+                    fontWeight: 1000,
+                    outline: "none",
+                    background: "rgba(255,255,255,0.92)",
+                  }}
+                />
+                <div style={{ fontSize: 12, fontWeight: 1000, color: "#0A0A0A" }}>ETH</div>
+              </div>
+            </>
+          )}
+
+          <div style={{ marginTop: 14 }}>
+            <button
+              type="button"
+              onClick={sendSupport}
+              className="btn btnPrimary"
+              disabled={ethPending || usdcPending}
+              style={{ width: "100%", height: 44 }}
+            >
+              {ethPending || usdcPending ? "Sending…" : "Send support"}
+            </button>
+          </div>
+
+          <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
+            <div className="subtle" style={{ flex: 1, wordBreak: "break-all" }}>
+              Builder: {BUILDER_ADDRESS}
+            </div>
+            <CopyButton value={BUILDER_ADDRESS} mode="icon" />
+          </div>
+
+          {supportMsg ? (
+            <div style={{ marginTop: 10, fontSize: 13, fontWeight: 900, color: supportMsg.startsWith("✅") ? "#065F46" : "#6B7280" }}>
+              {supportMsg}
+            </div>
+          ) : null}
         </div>
-        <div style={{ fontWeight: 900, color: '#6B7280', fontSize: 12 }}>{title}</div>
-      </div>
-      <div style={{ marginTop: 8, fontSize: 18, fontWeight: 900, color: '#0A0A0A' }}>
-        {value.toLocaleString()}
+
+        {/* Credits (simple) */}
+        <div style={{ marginTop: 14 }}>
+          <div className="card card-pad">
+            <div style={{ fontSize: 13, color: "rgba(0,0,0,0.65)", fontWeight: 900 }}>
+              created by 🅰️kbar |{" "}
+              <a href="https://x.com/akbarX402" target="_blank" rel="noreferrer">
+                x
+              </a>{" "}
+              |{" "}
+              <a href="https://base.app/profile/akbaronchain" target="_blank" rel="noreferrer">
+                baseapp
+              </a>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
