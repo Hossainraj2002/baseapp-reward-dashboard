@@ -16,7 +16,6 @@ type FarcasterUser = {
   follower_count: number;
   following_count: number;
   score: number;
-  // NOTE: exists in payload, but we intentionally DO NOT render it on profile
   bio?: string;
 };
 
@@ -66,6 +65,23 @@ type SocialPayload = {
 const BUILDER_ADDRESS = "0xd4a1D777e2882487d47c96bc23A47CeaB4f4f18A" as const;
 const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const; // Base USDC (6 decimals)
 const USDC_PRESETS = [0.5, 1, 2, 5, 10];
+
+function errToMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return "Unknown error";
+  }
+}
+
+function errToShortMessage(err: unknown): string | null {
+  if (!err || typeof err !== "object") return null;
+  const rec = err as Record<string, unknown>;
+  const sm = rec["shortMessage"];
+  return typeof sm === "string" ? sm : null;
+}
 
 function formatUsd(n: number) {
   const v = Number.isFinite(n) ? n : 0;
@@ -199,7 +215,7 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
   const { sendTransactionAsync, isPending: ethPending } = useSendTransaction();
   const { writeContractAsync, isPending: usdcPending } = useWriteContract();
 
-  // ===== Load Profile (uses store first, Neynar for missing users) =====
+  // ===== Load Profile (store first, Neynar fallback) =====
   useEffect(() => {
     let alive = true;
 
@@ -214,9 +230,9 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
         const json = (await res.json()) as ProfilePayload;
         if (!alive) return;
         setProfile(json);
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (!alive) return;
-        setProfileErr(e?.message ?? "Failed to load profile");
+        setProfileErr(errToMessage(e));
       } finally {
         if (!alive) return;
         setProfileLoading(false);
@@ -259,7 +275,6 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
 
       setSocialLoading(true);
       try {
-        // Current window (NO top posts)
         const r1 = await fetch(
           `/api/social?fid=${fid}&start=${encodeURIComponent(currentWindow.startIso)}&end=${encodeURIComponent(
             currentWindow.endIso
@@ -269,7 +284,6 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
         if (!r1.ok) throw new Error(`Social(current) failed (${r1.status})`);
         const j1 = (await r1.json()) as SocialPayload;
 
-        // Last reward window (keep top posts)
         const r2 = await fetch(
           `/api/social?fid=${fid}&start=${encodeURIComponent(lastRewardWindow.startIso)}&end=${encodeURIComponent(
             lastRewardWindow.endIso
@@ -282,9 +296,9 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
         if (!alive) return;
         setSocialCurrent(j1);
         setSocialLast(j2);
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (!alive) return;
-        setSocialErr(e?.message ?? "Failed to load social stats");
+        setSocialErr(errToMessage(e));
       } finally {
         if (!alive) return;
         setSocialLoading(false);
@@ -298,11 +312,10 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
   }, [profile?.farcaster_user?.fid, currentWindow, lastRewardWindow]);
 
   async function ensureBase() {
-    // Base App wallet usually is already on Base, but we handle it safely.
     try {
       await switchChainAsync?.({ chainId: base.id });
     } catch {
-      // If switchChain fails (some wallets), we still try to send and let wallet handle network prompt.
+      // wallet may handle network prompt itself
     }
   }
 
@@ -324,7 +337,6 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
         return;
       }
 
-      // USDC
       const amt = usdcAmount.trim();
       if (!amt || Number(amt) <= 0) throw new Error("Select or enter a USDC amount");
 
@@ -337,12 +349,11 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
       });
 
       setSupportMsg("✅ USDC sent. Thank you!");
-    } catch (e: any) {
-      setSupportMsg(e?.shortMessage ?? e?.message ?? "Transaction failed or rejected.");
+    } catch (e: unknown) {
+      setSupportMsg(errToShortMessage(e) ?? errToMessage(e) ?? "Transaction failed or rejected.");
     }
   }
 
-  // ===== Render helpers =====
   const u = profile?.farcaster_user ?? null;
   const rs = profile?.reward_summary ?? null;
   const rh = profile?.reward_history ?? [];
@@ -358,7 +369,7 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
         </div>
       ) : null}
 
-      {/* ===== Profile header (Match Find style, but WITHOUT bio/copy/visit/change wallet) ===== */}
+      {/* Profile header (no bio/copy/visit/change) */}
       <div className="card card-pad">
         {profileLoading ? (
           <div style={{ height: 70, borderRadius: 16, background: "rgba(0,0,0,0.06)" }} />
@@ -414,7 +425,7 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
         )}
       </div>
 
-      {/* ===== Onchain rewards (same structure as Find) ===== */}
+      {/* Onchain rewards */}
       {profile ? (
         <div style={{ marginTop: 18 }}>
           <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Onchain rewards</div>
@@ -423,74 +434,30 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
           </div>
 
           <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div
-              className="card"
-              style={{
-                padding: 16,
-                borderRadius: 18,
-                background: "#0000FF",
-                color: "white",
-                boxShadow: "0 18px 40px rgba(0,0,255,0.20)",
-              }}
-            >
+            <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
               <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>All-time rewards</div>
-              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
-                {formatUsd(rs?.all_time_usdc ?? 0)}
-              </div>
+              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>{formatUsd(rs?.all_time_usdc ?? 0)}</div>
             </div>
 
-            <div
-              className="card"
-              style={{
-                padding: 16,
-                borderRadius: 18,
-                background: "#0000FF",
-                color: "white",
-                boxShadow: "0 18px 40px rgba(0,0,255,0.20)",
-              }}
-            >
+            <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
               <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>Earning weeks</div>
-              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
-                {formatInt(rs?.earning_weeks ?? 0)}
-              </div>
+              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>{formatInt(rs?.earning_weeks ?? 0)}</div>
             </div>
 
-            <div
-              className="card"
-              style={{
-                padding: 16,
-                borderRadius: 18,
-                background: "#0000FF",
-                color: "white",
-                boxShadow: "0 18px 40px rgba(0,0,255,0.20)",
-              }}
-            >
+            <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
               <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>{rs?.latest_week_label || "Current week"}</div>
-              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
-                {formatUsd(rs?.latest_week_usdc ?? 0)}
-              </div>
+              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>{formatUsd(rs?.latest_week_usdc ?? 0)}</div>
               <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, opacity: 0.9 }}>Current week</div>
             </div>
 
-            <div
-              className="card"
-              style={{
-                padding: 16,
-                borderRadius: 18,
-                background: "#0000FF",
-                color: "white",
-                boxShadow: "0 18px 40px rgba(0,0,255,0.20)",
-              }}
-            >
+            <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
               <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>{rs?.prev_week_label || "Previous week"}</div>
-              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
-                {formatUsd(rs?.prev_week_usdc ?? 0)}
-              </div>
+              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>{formatUsd(rs?.prev_week_usdc ?? 0)}</div>
               <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, opacity: 0.9 }}>Previous week</div>
             </div>
           </div>
 
-          {/* Weekly reward wins (restored) */}
+          {/* Weekly reward wins */}
           <div style={{ marginTop: 18 }}>
             <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Weekly reward wins</div>
             <div className="subtle" style={{ marginTop: 4 }}>
@@ -509,7 +476,9 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
                     background: "rgba(255,255,255,0.92)",
                   }}
                 >
-                  <div style={{ fontSize: 13, fontWeight: 1100, color: "#0000FF" }}>{w.week_label.split("–")[0].trim()}</div>
+                  <div style={{ fontSize: 13, fontWeight: 1100, color: "#0000FF" }}>
+                    {w.week_label.split("–")[0].trim()}
+                  </div>
                   <div style={{ fontSize: 18, fontWeight: 1200, marginTop: 6 }}>{formatUsd(w.usdc)}</div>
                   <div className="subtle" style={{ marginTop: 6, fontSize: 11 }}>
                     {w.week_label.split("–").slice(1).join("–").trim()}
@@ -521,7 +490,7 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
         </div>
       ) : null}
 
-      {/* ===== Social (keep; current block no top posts) ===== */}
+      {/* Social */}
       {profile ? (
         <div style={{ marginTop: 22 }}>
           <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Social</div>
@@ -541,15 +510,7 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
           ) : (
             <>
               {socialCurrent && currentWindow ? (
-                <div
-                  className="card card-pad"
-                  style={{
-                    marginTop: 12,
-                    background: "linear-gradient(180deg, rgba(245,248,255,0.92) 0%, rgba(255,255,255,0.90) 100%)",
-                    border: "1px solid rgba(0,0,0,0.08)",
-                    boxShadow: "0 16px 40px rgba(0,0,0,0.06)",
-                  }}
-                >
+                <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.92)" }}>
                   <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Current social activity</div>
                   <div className="subtle" style={{ marginTop: 4 }}>
                     {prettyWindowLabel(currentWindow.startIso, currentWindow.endIso)}
@@ -565,14 +526,7 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
               ) : null}
 
               {socialLast && lastRewardWindow ? (
-                <div
-                  className="card card-pad"
-                  style={{
-                    marginTop: 12,
-                    background: "rgba(245,248,255,0.78)",
-                    border: "1px solid rgba(0,0,0,0.08)",
-                  }}
-                >
+                <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.78)" }}>
                   <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Social activity of last reward window</div>
                   <div className="subtle" style={{ marginTop: 4 }}>
                     {prettyWindowLabel(lastRewardWindow.startIso, lastRewardWindow.endIso)}
@@ -585,42 +539,20 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
                     <SoftStatCard icon={<span style={{ fontSize: 18 }}>💬</span>} label="Replies" value={socialLast.replies} />
                   </div>
 
-                  {/* Top posts only in last window (current window stays clean) */}
                   <div style={{ marginTop: 14 }}>
                     <div style={{ fontWeight: 1100, color: "#0A0A0A" }}>Top posts</div>
-                    <div className="subtle" style={{ marginTop: 4 }}>
-                      Top 7 posts in this window
-                    </div>
+                    <div className="subtle" style={{ marginTop: 4 }}>Top 7 posts in this window</div>
 
                     <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
                       {socialLast.top_posts.length === 0 ? (
-                        <div
-                          className="subtle"
-                          style={{
-                            padding: 12,
-                            borderRadius: 14,
-                            border: "1px solid rgba(0,0,0,0.08)",
-                            background: "rgba(255,255,255,0.8)",
-                          }}
-                        >
+                        <div className="subtle" style={{ padding: 12, borderRadius: 14, border: "1px solid rgba(0,0,0,0.08)" }}>
                           No posts found in this timeframe.
                         </div>
                       ) : (
                         socialLast.top_posts.map((p) => (
-                          <div
-                            key={p.hash}
-                            className="card"
-                            style={{
-                              padding: 14,
-                              borderRadius: 16,
-                              border: "1px solid rgba(0,0,0,0.08)",
-                              background: "rgba(255,255,255,0.92)",
-                            }}
-                          >
-                            <div style={{ fontWeight: 1000, color: "#0A0A0A", lineHeight: 1.35 }}>
-                              {p.text || "—"}
-                            </div>
-                            <div className="subtle" style={{ marginTop: 8, display: "flex", gap: 14, alignItems: "center" }}>
+                          <div key={p.hash} className="card" style={{ padding: 14, borderRadius: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
+                            <div style={{ fontWeight: 1000, color: "#0A0A0A", lineHeight: 1.35 }}>{p.text || "—"}</div>
+                            <div className="subtle" style={{ marginTop: 8, display: "flex", gap: 14 }}>
                               <span>❤️ {formatInt(p.likes)}</span>
                               <span>🔁 {formatInt(p.recasts)}</span>
                               <span>💬 {formatInt(p.replies)}</span>
@@ -637,114 +569,67 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
         </div>
       ) : null}
 
-      {/* ===== Support (USDC presets+custom, ETH custom) ===== */}
+      {/* Support */}
       <div style={{ marginTop: 22 }}>
         <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Support the builder</div>
         <div className="subtle" style={{ marginTop: 4 }}>
           Sends funds directly from your wallet → builder address. You confirm inside your wallet.
         </div>
 
-        <div
-          className="card card-pad"
-          style={{
-            marginTop: 12,
-            background: "linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(245,248,255,0.92) 100%)",
-            border: "1px solid rgba(0,0,0,0.08)",
-            boxShadow: "0 14px 38px rgba(0,0,0,0.06)",
-          }}
-        >
+        <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.92)" }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => setAsset("USDC")}
-              className={asset === "USDC" ? "btn btnPrimary" : "btn"}
-              style={{ borderRadius: 999 }}
-            >
+            <button type="button" onClick={() => setAsset("USDC")} className={asset === "USDC" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
               USDC
             </button>
-            <button
-              type="button"
-              onClick={() => setAsset("ETH")}
-              className={asset === "ETH" ? "btn btnPrimary" : "btn"}
-              style={{ borderRadius: 999 }}
-            >
+            <button type="button" onClick={() => setAsset("ETH")} className={asset === "ETH" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
               ETH
             </button>
           </div>
 
           {asset === "USDC" ? (
             <>
-              <div style={{ marginTop: 12, fontWeight: 1000, color: "rgba(0,0,0,0.7)" }}>Choose amount</div>
-
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-                {USDC_PRESETS.map((p) => {
-                  const active = Number(usdcAmount) === p;
-                  return (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setUsdcAmount(String(p))}
-                      className={active ? "btn btnPrimary" : "btn"}
-                      style={{ borderRadius: 999, paddingInline: 14 }}
-                    >
-                      ${p}
-                    </button>
-                  );
-                })}
+              <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {USDC_PRESETS.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setUsdcAmount(String(p))}
+                    className={Number(usdcAmount) === p ? "btn btnPrimary" : "btn"}
+                    style={{ borderRadius: 999 }}
+                  >
+                    ${p}
+                  </button>
+                ))}
               </div>
 
               <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ fontSize: 12, fontWeight: 1000, color: "rgba(0,0,0,0.55)" }}>Custom</div>
+                <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.7 }}>Custom</div>
                 <input
                   value={usdcAmount}
                   onChange={(e) => setUsdcAmount(clampAmountString(e.target.value, 6))}
                   inputMode="decimal"
                   placeholder="1"
-                  style={{
-                    flex: 1,
-                    borderRadius: 14,
-                    border: "1px solid rgba(0,0,0,0.12)",
-                    padding: "10px 12px",
-                    fontWeight: 1000,
-                    outline: "none",
-                    background: "rgba(255,255,255,0.92)",
-                  }}
+                  style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
                 />
-                <div style={{ fontSize: 12, fontWeight: 1000, color: "#0A0A0A" }}>USDC</div>
+                <div style={{ fontSize: 12, fontWeight: 1000 }}>USDC</div>
               </div>
             </>
           ) : (
-            <>
-              <div style={{ marginTop: 12, fontWeight: 1000, color: "rgba(0,0,0,0.7)" }}>Custom amount</div>
-              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
-                <input
-                  value={ethAmount}
-                  onChange={(e) => setEthAmount(clampAmountString(e.target.value, 18))}
-                  inputMode="decimal"
-                  placeholder="0.001"
-                  style={{
-                    flex: 1,
-                    borderRadius: 14,
-                    border: "1px solid rgba(0,0,0,0.12)",
-                    padding: "10px 12px",
-                    fontWeight: 1000,
-                    outline: "none",
-                    background: "rgba(255,255,255,0.92)",
-                  }}
-                />
-                <div style={{ fontSize: 12, fontWeight: 1000, color: "#0A0A0A" }}>ETH</div>
-              </div>
-            </>
+            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.7 }}>Amount</div>
+              <input
+                value={ethAmount}
+                onChange={(e) => setEthAmount(clampAmountString(e.target.value, 18))}
+                inputMode="decimal"
+                placeholder="0.001"
+                style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
+              />
+              <div style={{ fontSize: 12, fontWeight: 1000 }}>ETH</div>
+            </div>
           )}
 
           <div style={{ marginTop: 14 }}>
-            <button
-              type="button"
-              onClick={sendSupport}
-              className="btn btnPrimary"
-              disabled={ethPending || usdcPending}
-              style={{ width: "100%", height: 44 }}
-            >
+            <button type="button" onClick={sendSupport} className="btn btnPrimary" disabled={ethPending || usdcPending} style={{ width: "100%", height: 44 }}>
               {ethPending || usdcPending ? "Sending…" : "Send support"}
             </button>
           </div>
@@ -761,22 +646,6 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
               {supportMsg}
             </div>
           ) : null}
-        </div>
-
-        {/* Credits (simple) */}
-        <div style={{ marginTop: 14 }}>
-          <div className="card card-pad">
-            <div style={{ fontSize: 13, color: "rgba(0,0,0,0.65)", fontWeight: 900 }}>
-              created by 🅰️kbar |{" "}
-              <a href="https://x.com/akbarX402" target="_blank" rel="noreferrer">
-                x
-              </a>{" "}
-              |{" "}
-              <a href="https://base.app/profile/akbaronchain" target="_blank" rel="noreferrer">
-                baseapp
-              </a>
-            </div>
-          </div>
         </div>
       </div>
     </div>
