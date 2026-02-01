@@ -163,16 +163,24 @@ function SoftStatCard({ icon, label, value }: { icon: React.ReactNode; label: st
   );
 }
 
+/** minimal safe shape without `any` */
+type MiniKitContextLike = {
+  user?: {
+    walletAddress?: string;
+    address?: string;
+  };
+  walletAddress?: string;
+  address?: string;
+} | null;
+
 export default function ProfileDashboardClient() {
   const { context } = useMiniKit();
   const inBaseApp = Boolean(context);
 
-  // wagmi fallback
-  const { address: wagmiAddress, isConnected: _isConnected } = useAccount();
+  const { address: wagmiAddress } = useAccount();
 
-  // Robust address detection for Base app + fallback to wagmi
   const activeAddress: `0x${string}` | null = useMemo(() => {
-    const c: any = context as any;
+    const c = (context ?? null) as MiniKitContextLike;
 
     const candidates: Array<unknown> = [
       c?.user?.walletAddress,
@@ -208,7 +216,7 @@ export default function ProfileDashboardClient() {
   const { sendTransactionAsync, isPending: ethPending } = useSendTransaction();
   const { writeContractAsync, isPending: usdcPending } = useWriteContract();
 
-  // ===== Load Profile (NEYNAR FIRST via /api/profile?resolve=1; store fallback is inside API) =====
+  // ===== Load Profile =====
   useEffect(() => {
     let alive = true;
 
@@ -265,7 +273,10 @@ export default function ProfileDashboardClient() {
       setSocialLast(null);
       setSocialErr(null);
 
-      const fid = profile?.farcaster?.fid ?? profile?.farcaster_user?.fid ?? null;
+      const fc2 = (profile as unknown as { farcaster?: { fid?: number }; farcaster_user?: { fid?: number } } | null);
+      const fid: number | null = fc2?.farcaster?.fid ?? fc2?.farcaster_user?.fid ?? null;
+
+
       if (!fid || !currentWindow || !lastRewardWindow) return;
 
       setSocialLoading(true);
@@ -352,7 +363,20 @@ export default function ProfileDashboardClient() {
   const data = profile;
   const addr = activeAddress ?? (profile?.address as `0x${string}` | undefined) ?? null;
 
-  const fc = data?.farcaster ?? data?.farcaster_user ?? null;
+  // read farcaster object safely (support both shapes)
+  const fcRaw = (data as unknown as { farcaster?: unknown; farcaster_user?: unknown }) || {};
+  const fc = (fcRaw.farcaster ?? fcRaw.farcaster_user ?? null) as
+    | {
+        fid?: number;
+        username?: string;
+        display_name?: string;
+        pfp_url?: string;
+        follower_count?: number;
+        following_count?: number;
+        score?: number;
+        neynar_user_score?: number;
+      }
+    | null;
 
   const scoreValue =
     fc?.score != null ? fc.score.toFixed(2) : fc?.neynar_user_score != null ? fc.neynar_user_score.toFixed(2) : null;
@@ -388,7 +412,7 @@ export default function ProfileDashboardClient() {
         </div>
       ) : null}
 
-      {/* ===== Profile header (MATCH Find/address UI, but NO bio + NO copy button) ===== */}
+      {/* Profile header (Find/address style, no bio, no copy) */}
       <div className="card" style={headerCard}>
         {profileLoading ? (
           <div style={{ height: 90, borderRadius: 16, background: "rgba(0,0,0,0.06)" }} />
@@ -396,20 +420,14 @@ export default function ProfileDashboardClient() {
           <div style={{ color: "#B91C1C", fontWeight: 900 }}>{profileErr}</div>
         ) : !data ? (
           <div style={{ color: "#6B7280", fontWeight: 900 }}>
-            {activeAddress ? "No profile payload returned." : "Connect/open inside Base app to load your profile."}
+            {activeAddress ? "No profile payload returned." : "Open inside Base app to load your profile."}
           </div>
         ) : (
           <>
             <div style={topRow}>
               <div style={avatarWrap}>
                 {fc?.pfp_url ? (
-                  <img
-                    src={fc.pfp_url}
-                    alt=""
-                    style={avatarImg}
-                    loading="lazy"
-                    referrerPolicy="no-referrer"
-                  />
+                  <img src={fc.pfp_url} alt="" style={avatarImg} loading="lazy" referrerPolicy="no-referrer" />
                 ) : (
                   <div style={avatarFallback} />
                 )}
@@ -421,12 +439,10 @@ export default function ProfileDashboardClient() {
                     {displayName}
                   </div>
                 </div>
-
                 <div style={usernameStyle}>{usernameLine}</div>
               </div>
             </div>
 
-            {/* stats only (no bio) */}
             <div style={fullWidthInfo}>
               <div style={statsBlock}>
                 <div style={statsRow}>
@@ -443,20 +459,13 @@ export default function ProfileDashboardClient() {
         )}
       </div>
 
-      {/* Visit button (text + centered) */}
       {baseappUrl ? (
-        <a
-          href={baseappUrl}
-          target="_blank"
-          rel="noreferrer noopener"
-          className="btn btnPrimary"
-          style={baseappBtn}
-        >
+        <a href={baseappUrl} target="_blank" rel="noreferrer noopener" className="btn btnPrimary" style={baseappBtn}>
           Visit your profile on Baseapp
         </a>
       ) : null}
 
-      {/* ===== Onchain rewards (SAME UI + SAME DATA LOGIC as Find/address) ===== */}
+      {/* Onchain rewards (same fields as Find/address) */}
       {data ? (
         <>
           <SectionTitle>Onchain rewards</SectionTitle>
@@ -497,7 +506,7 @@ export default function ProfileDashboardClient() {
         </>
       ) : null}
 
-      {/* ===== Social (keep working section) ===== */}
+      {/* Social (keep) */}
       {data ? (
         <div style={{ marginTop: 22 }}>
           <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Social</div>
@@ -531,52 +540,12 @@ export default function ProfileDashboardClient() {
                   </div>
                 </div>
               ) : null}
-
-              {socialLast && lastRewardWindow ? (
-                <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.78)" }}>
-                  <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Social activity of last reward window</div>
-                  <div className="subtle" style={{ marginTop: 4 }}>
-                    {prettyWindowLabel(lastRewardWindow.startIso, lastRewardWindow.endIso)}
-                  </div>
-
-                  <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>📝</span>} label="Casts" value={socialLast.casts} />
-                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>❤️</span>} label="Likes" value={socialLast.likes} />
-                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>🔁</span>} label="Recasts" value={socialLast.recasts} />
-                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>💬</span>} label="Replies" value={socialLast.replies} />
-                  </div>
-
-                  <div style={{ marginTop: 14 }}>
-                    <div style={{ fontWeight: 1100, color: "#0A0A0A" }}>Top posts</div>
-                    <div className="subtle" style={{ marginTop: 4 }}>Top 7 posts in this window</div>
-
-                    <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-                      {socialLast.top_posts.length === 0 ? (
-                        <div className="subtle" style={{ padding: 12, borderRadius: 14, border: "1px solid rgba(0,0,0,0.08)" }}>
-                          No posts found in this timeframe.
-                        </div>
-                      ) : (
-                        socialLast.top_posts.map((p) => (
-                          <div key={p.hash} className="card" style={{ padding: 14, borderRadius: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
-                            <div style={{ fontWeight: 1000, color: "#0A0A0A", lineHeight: 1.35 }}>{p.text || "—"}</div>
-                            <div className="subtle" style={{ marginTop: 8, display: "flex", gap: 14 }}>
-                              <span>❤️ {formatInt(p.likes)}</span>
-                              <span>🔁 {formatInt(p.recasts)}</span>
-                              <span>💬 {formatInt(p.replies)}</span>
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
             </>
           )}
         </div>
       ) : null}
 
-      {/* ===== Support (keep working section) ===== */}
+      {/* Support (keep) */}
       <div style={{ marginTop: 22 }}>
         <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Support the builder</div>
         <div className="subtle" style={{ marginTop: 4 }}>
@@ -585,20 +554,10 @@ export default function ProfileDashboardClient() {
 
         <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.92)" }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => setAsset("USDC")}
-              className={asset === "USDC" ? "btn btnPrimary" : "btn"}
-              style={{ borderRadius: 999 }}
-            >
+            <button type="button" onClick={() => setAsset("USDC")} className={asset === "USDC" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
               USDC
             </button>
-            <button
-              type="button"
-              onClick={() => setAsset("ETH")}
-              className={asset === "ETH" ? "btn btnPrimary" : "btn"}
-              style={{ borderRadius: 999 }}
-            >
+            <button type="button" onClick={() => setAsset("ETH")} className={asset === "ETH" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
               ETH
             </button>
           </div>
@@ -626,14 +585,7 @@ export default function ProfileDashboardClient() {
                   onChange={(e) => setUsdcAmount(clampAmountString(e.target.value, 6))}
                   inputMode="decimal"
                   placeholder="1"
-                  style={{
-                    flex: 1,
-                    borderRadius: 14,
-                    border: "1px solid rgba(0,0,0,0.12)",
-                    padding: "10px 12px",
-                    fontWeight: 1000,
-                    outline: "none",
-                  }}
+                  style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
                 />
                 <div style={{ fontSize: 12, fontWeight: 1000 }}>USDC</div>
               </div>
@@ -646,27 +598,14 @@ export default function ProfileDashboardClient() {
                 onChange={(e) => setEthAmount(clampAmountString(e.target.value, 18))}
                 inputMode="decimal"
                 placeholder="0.001"
-                style={{
-                  flex: 1,
-                  borderRadius: 14,
-                  border: "1px solid rgba(0,0,0,0.12)",
-                  padding: "10px 12px",
-                  fontWeight: 1000,
-                  outline: "none",
-                }}
+                style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
               />
               <div style={{ fontSize: 12, fontWeight: 1000 }}>ETH</div>
             </div>
           )}
 
           <div style={{ marginTop: 14 }}>
-            <button
-              type="button"
-              onClick={sendSupport}
-              className="btn btnPrimary"
-              disabled={ethPending || usdcPending}
-              style={{ width: "100%", height: 44 }}
-            >
+            <button type="button" onClick={sendSupport} className="btn btnPrimary" disabled={ethPending || usdcPending} style={{ width: "100%", height: 44 }}>
               {ethPending || usdcPending ? "Sending…" : "Send support"}
             </button>
           </div>
@@ -686,7 +625,7 @@ export default function ProfileDashboardClient() {
   );
 }
 
-/* ---------- Styles (aligned to Find/address sizing) ---------- */
+/* ---------- Styles ---------- */
 
 const headerCard: React.CSSProperties = {
   padding: 12,
@@ -775,7 +714,7 @@ const statsRow: React.CSSProperties = {
 };
 
 const chip: React.CSSProperties = {
-  height: 24, // smaller (<= 0.7cm feel)
+  height: 24,
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
