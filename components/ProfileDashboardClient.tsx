@@ -1,32 +1,30 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import Image from "next/image";
 import { useMiniKit } from "@coinbase/onchainkit/minikit";
 import { useAccount, useSendTransaction, useSwitchChain, useWriteContract } from "wagmi";
 import { base } from "viem/chains";
 import { erc20Abi, parseEther, parseUnits } from "viem";
-import CopyButton from "@/components/CopyButton";
+import CopyButton from "@/components/CopyButton"; // still used in Support section only
 
-/** ===== Types (match your /lib/profilePayload.ts) ===== */
 type FarcasterUser = {
   fid: number;
   username: string;
-  display_name?: string | null;
-  pfp_url?: string | null;
-  follower_count?: number | null;
-  following_count?: number | null;
-  score?: number | null;
-  bio_text?: string | null;
+  display_name: string;
+  pfp_url: string;
+  follower_count: number;
+  following_count: number;
+  score: number;
+  bio?: string;
 };
 
 type RewardSummary = {
-  total_usdc_earned: number;
-  total_weeks_earned: number;
+  all_time_usdc: number;
+  earning_weeks: number;
   latest_week_label: string;
   latest_week_usdc: number;
-  previous_week_label: string;
-  previous_week_usdc: number;
+  prev_week_label: string;
+  prev_week_usdc: number;
   latest_week_start_utc: string; // ISO string (UTC)
 };
 
@@ -39,7 +37,7 @@ type RewardHistory = {
 
 type ProfilePayload = {
   address: `0x${string}`;
-  farcaster: FarcasterUser | null;
+  farcaster_user: FarcasterUser | null;
   reward_summary: RewardSummary;
   reward_history: RewardHistory[];
   source?: "store" | "neynar" | "none";
@@ -64,10 +62,9 @@ type SocialPayload = {
 
 // ===== Support config =====
 const BUILDER_ADDRESS = "0xd4a1D777e2882487d47c96bc23A47CeaB4f4f18A" as const;
-const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const; // Base USDC (6 decimals)
+const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
 const USDC_PRESETS = [0.5, 1, 2, 5, 10];
 
-/** ===== Helpers ===== */
 function errToMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
@@ -120,17 +117,14 @@ function prettyWindowLabel(startIso: string, endIso: string) {
   return `[${fmt(s)} → ${fmt(e)}]`;
 }
 
-/** ===== EXACT same Base profile URL helper (from Find/address) ===== */
 function baseProfileUrl(address: string, username?: string | null) {
   if (username && username.trim().length > 0) {
     const first = username.startsWith("@") ? username.slice(1) : username;
     return `https://base.app/profile/${encodeURIComponent(first)}`;
   }
-  const cleanAddress = address;
-  return `https://base.app/profile/${encodeURIComponent(cleanAddress)}`;
+  return `https://base.app/profile/${encodeURIComponent(address)}`;
 }
 
-/** ===== UI parts (match Find/address style) ===== */
 function StatPill({
   label,
   value,
@@ -143,20 +137,21 @@ function StatPill({
   return (
     <div
       style={{
-        display: "inline-flex",
+        display: "flex",
         alignItems: "center",
         gap: 10,
-        padding: "10px 14px",
+        padding: "9px 12px",
         borderRadius: 999,
         background: "#EEF3FF",
         border: "1px solid rgba(0,0,0,0.06)",
         fontWeight: 900,
         color: "#0A0A0A",
+        width: "100%",
       }}
     >
       <span style={{ display: "grid", placeItems: "center" }}>{icon}</span>
-      <span style={{ opacity: 0.75 }}>{label}:</span>
-      <span style={{ fontWeight: 1100 }}>{value}</span>
+      <span style={{ opacity: 0.75, fontSize: 13 }}>{label}:</span>
+      <span style={{ fontWeight: 1100, fontSize: 14 }}>{value}</span>
     </div>
   );
 }
@@ -234,18 +229,16 @@ function SoftStatCard({
 }
 
 export default function ProfileDashboardClient(props: { address?: `0x${string}` }) {
-  /** ===== Hooks MUST be unconditional (to avoid hook lint errors) ===== */
+  // hooks MUST stay top-level
   const { context } = useMiniKit();
   const inBaseApp = Boolean(context);
 
-  const { address: wagmiAddress, isConnected } = useAccount();
+  const { address: wagmiAddress } = useAccount();
+  const activeAddress = (props.address ?? wagmiAddress) as `0x${string}` | undefined;
 
   const { switchChainAsync } = useSwitchChain();
   const { sendTransactionAsync, isPending: ethPending } = useSendTransaction();
   const { writeContractAsync, isPending: usdcPending } = useWriteContract();
-
-  /** Active address: props.address (optional) OR connected wallet address */
-  const activeAddress = (props.address ?? wagmiAddress) as `0x${string}` | undefined;
 
   // ===== Data state =====
   const [profile, setProfile] = useState<ProfilePayload | null>(null);
@@ -257,19 +250,23 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
   const [socialErr, setSocialErr] = useState<string | null>(null);
   const [socialLoading, setSocialLoading] = useState(false);
 
+  // ===== PFP fallback handling =====
+  const [pfpBroken, setPfpBroken] = useState(false);
+
   // ===== Support state =====
   const [asset, setAsset] = useState<"USDC" | "ETH">("USDC");
   const [usdcAmount, setUsdcAmount] = useState<string>("1");
   const [ethAmount, setEthAmount] = useState<string>("0.001");
   const [supportMsg, setSupportMsg] = useState<string | null>(null);
 
-  // ===== Load Profile (store first, Neynar fallback happens inside API) =====
+  // ===== Load Profile =====
   useEffect(() => {
     let alive = true;
 
     async function run() {
       setProfile(null);
       setProfileErr(null);
+      setPfpBroken(false);
 
       if (!activeAddress) return;
 
@@ -295,7 +292,11 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
     };
   }, [activeAddress]);
 
-  const latestWeekStartIso = profile?.reward_summary?.latest_week_start_utc ?? null;
+  const u = profile?.farcaster_user ?? null;
+  const rs = profile?.reward_summary ?? null;
+  const rh = profile?.reward_history ?? [];
+
+  const latestWeekStartIso = rs?.latest_week_start_utc ?? null;
 
   const currentWindow = useMemo(() => {
     if (!latestWeekStartIso) return null;
@@ -311,7 +312,7 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
     return { startIso: toIsoUtc(start), endIso: toIsoUtc(end) };
   }, [latestWeekStartIso]);
 
-  // ===== Load Social (2 blocks) =====
+  // ===== Load Social =====
   useEffect(() => {
     let alive = true;
 
@@ -320,7 +321,7 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
       setSocialLast(null);
       setSocialErr(null);
 
-      const fid = profile?.farcaster?.fid ?? null;
+      const fid = u?.fid ?? null;
       if (!fid || !currentWindow || !lastRewardWindow) return;
 
       setSocialLoading(true);
@@ -359,7 +360,12 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
     return () => {
       alive = false;
     };
-  }, [profile?.farcaster?.fid, currentWindow, lastRewardWindow]);
+  }, [u?.fid, currentWindow, lastRewardWindow]);
+
+  const visitUrl = useMemo(() => {
+    if (!activeAddress) return null;
+    return baseProfileUrl(activeAddress, u?.username ?? null);
+  }, [activeAddress, u?.username]);
 
   async function ensureBase() {
     try {
@@ -404,15 +410,6 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
     }
   }
 
-  const u = profile?.farcaster ?? null;
-  const rs = profile?.reward_summary ?? null;
-  const rh = profile?.reward_history ?? [];
-
-  const visitUrl = useMemo(() => {
-    if (!activeAddress) return null;
-    return baseProfileUrl(activeAddress, u?.username ?? null);
-  }, [activeAddress, u?.username]);
-
   return (
     <div style={{ paddingBottom: 40 }}>
       {!inBaseApp ? (
@@ -424,17 +421,16 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
         </div>
       ) : null}
 
-      {/* If not connected and no address passed */}
       {!activeAddress ? (
         <div className="card card-pad">
           <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Connect wallet</div>
           <div className="subtle" style={{ marginTop: 6 }}>
-            {isConnected ? "Reading wallet…" : "Please connect your wallet to load your Profile data."}
+            Please connect your wallet to load your Profile.
           </div>
         </div>
       ) : null}
 
-      {/* ===== PROFILE HEADER (MATCH Find/address UI) ===== */}
+      {/* ===== PROFILE HEADER ===== */}
       <div
         style={{
           marginTop: 10,
@@ -446,31 +442,30 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
         }}
       >
         {profileLoading ? (
-          <div style={{ height: 90, borderRadius: 16, background: "rgba(0,0,0,0.06)" }} />
+          <div style={{ height: 120, borderRadius: 16, background: "rgba(0,0,0,0.06)" }} />
         ) : profileErr ? (
           <div style={{ color: "#B91C1C", fontWeight: 1000 }}>{profileErr}</div>
         ) : (
           <>
             <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-              <div
+              {/* Use <img> to guarantee PFP works without Next remotePatterns */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={!pfpBroken ? (u?.pfp_url || "/icon.png") : "/icon.png"}
+                alt="pfp"
+                width={78}
+                height={78}
+                onError={() => setPfpBroken(true)}
                 style={{
                   width: 78,
                   height: 78,
                   borderRadius: 18,
-                  overflow: "hidden",
+                  objectFit: "cover",
                   background: "rgba(0,0,0,0.04)",
                   border: "1px solid rgba(0,0,0,0.08)",
                   flex: "0 0 auto",
                 }}
-              >
-                <Image
-                  src={u?.pfp_url || "/icon.png"}
-                  alt="pfp"
-                  width={78}
-                  height={78}
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
-              </div>
+              />
 
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
@@ -500,37 +495,16 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
                   @{u?.username || "unknown"}
                 </div>
               </div>
-
-              <div style={{ flex: "0 0 auto" }}>
-                <button
-                  type="button"
-                  className="btn"
-                  style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 14,
-                    border: "2px solid rgba(0,0,255,0.55)",
-                    display: "grid",
-                    placeItems: "center",
-                    background: "#fff",
-                  }}
-                  onClick={() => {
-                    if (activeAddress) navigator.clipboard?.writeText(activeAddress).catch(() => {});
-                  }}
-                  aria-label="Copy address"
-                >
-                  {activeAddress && <CopyButton value={activeAddress} mode="icon" />}
-                </button>
-              </div>
             </div>
 
-            {u?.bio_text ? (
+            {u?.bio ? (
               <div style={{ marginTop: 10, color: "rgba(0,0,0,0.65)", fontWeight: 700, lineHeight: 1.35 }}>
-                {u.bio_text}
+                {u.bio}
               </div>
             ) : null}
 
-            <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 10 }}>
+            {/* Pills: force 2 columns so Following + Followers stay on same row */}
+            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <StatPill label="Score" value={(u?.score ?? 0).toFixed(2)} icon={<span>🪐</span>} />
               <StatPill label="FID" value={formatInt(u?.fid ?? 0)} icon={<span>🆔</span>} />
               <StatPill label="Following" value={formatInt(u?.following_count ?? 0)} icon={<span>➕</span>} />
@@ -540,7 +514,7 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
         )}
       </div>
 
-      {/* Visit user profile button (MATCH Find/address) */}
+      {/* Visit button text + perfect center */}
       {visitUrl ? (
         <a
           href={visitUrl}
@@ -548,7 +522,9 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
           rel="noreferrer"
           className="btn btnPrimary"
           style={{
-            display: "block",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
             marginTop: 12,
             height: 54,
             borderRadius: 18,
@@ -556,15 +532,13 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
             fontSize: 16,
             boxShadow: "0 18px 40px rgba(0,0,255,0.22)",
             textDecoration: "none",
-            textAlign: "center",
-            lineHeight: "54px",
           }}
         >
-          Visit user profile on Baseapp
+          Visit your profile on Baseapp
         </a>
       ) : null}
 
-      {/* ===== Onchain rewards (MATCH Find/address UI) ===== */}
+      {/* ===== Onchain rewards (now uses YOUR API field names) ===== */}
       {profile ? (
         <div style={{ marginTop: 18 }}>
           <div style={{ fontWeight: 1100, fontSize: 22, color: "#0A0A0A" }}>Onchain rewards</div>
@@ -573,22 +547,21 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
           </div>
 
           <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            <OnchainCard title="All-time rewards" value={formatUsd(rs?.total_usdc_earned ?? 0)} />
-            <OnchainCard title="Earning weeks" value={formatInt(rs?.total_weeks_earned ?? 0)} />
-
+            <OnchainCard title="All-time rewards" value={formatUsd(rs?.all_time_usdc ?? 0)} />
+            <OnchainCard title="Earning weeks" value={formatInt(rs?.earning_weeks ?? 0)} />
             <OnchainCard
               title={rs?.latest_week_label || "Current week"}
               value={formatUsd(rs?.latest_week_usdc ?? 0)}
               subtitle="Current week"
             />
             <OnchainCard
-              title={rs?.previous_week_label || "Previous week"}
-              value={formatUsd(rs?.previous_week_usdc ?? 0)}
+              title={rs?.prev_week_label || "Previous week"}
+              value={formatUsd(rs?.prev_week_usdc ?? 0)}
               subtitle="Previous week"
             />
           </div>
 
-          {/* Weekly reward wins (keep your existing section, but layout already close) */}
+          {/* Weekly wins */}
           <div style={{ marginTop: 18 }}>
             <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Weekly reward wins</div>
             <div className="subtle" style={{ marginTop: 4 }}>
@@ -621,7 +594,7 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
         </div>
       ) : null}
 
-      {/* ===== Social (keep your working logic) ===== */}
+      {/* ===== Social (unchanged) ===== */}
       {profile ? (
         <div style={{ marginTop: 22 }}>
           <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Social</div>
@@ -676,19 +649,12 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
 
                     <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
                       {socialLast.top_posts.length === 0 ? (
-                        <div
-                          className="subtle"
-                          style={{ padding: 12, borderRadius: 14, border: "1px solid rgba(0,0,0,0.08)" }}
-                        >
+                        <div className="subtle" style={{ padding: 12, borderRadius: 14, border: "1px solid rgba(0,0,0,0.08)" }}>
                           No posts found in this timeframe.
                         </div>
                       ) : (
                         socialLast.top_posts.map((p) => (
-                          <div
-                            key={p.hash}
-                            className="card"
-                            style={{ padding: 14, borderRadius: 16, border: "1px solid rgba(0,0,0,0.08)" }}
-                          >
+                          <div key={p.hash} className="card" style={{ padding: 14, borderRadius: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
                             <div style={{ fontWeight: 1000, color: "#0A0A0A", lineHeight: 1.35 }}>{p.text || "—"}</div>
                             <div className="subtle" style={{ marginTop: 8, display: "flex", gap: 14 }}>
                               <span>❤️ {formatInt(p.likes)}</span>
@@ -716,20 +682,10 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
 
         <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.92)" }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => setAsset("USDC")}
-              className={asset === "USDC" ? "btn btnPrimary" : "btn"}
-              style={{ borderRadius: 999 }}
-            >
+            <button type="button" onClick={() => setAsset("USDC")} className={asset === "USDC" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
               USDC
             </button>
-            <button
-              type="button"
-              onClick={() => setAsset("ETH")}
-              className={asset === "ETH" ? "btn btnPrimary" : "btn"}
-              style={{ borderRadius: 999 }}
-            >
+            <button type="button" onClick={() => setAsset("ETH")} className={asset === "ETH" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
               ETH
             </button>
           </div>
@@ -757,14 +713,7 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
                   onChange={(e) => setUsdcAmount(clampAmountString(e.target.value, 6))}
                   inputMode="decimal"
                   placeholder="1"
-                  style={{
-                    flex: 1,
-                    borderRadius: 14,
-                    border: "1px solid rgba(0,0,0,0.12)",
-                    padding: "10px 12px",
-                    fontWeight: 1000,
-                    outline: "none",
-                  }}
+                  style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
                 />
                 <div style={{ fontSize: 12, fontWeight: 1000 }}>USDC</div>
               </div>
@@ -777,27 +726,14 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
                 onChange={(e) => setEthAmount(clampAmountString(e.target.value, 18))}
                 inputMode="decimal"
                 placeholder="0.001"
-                style={{
-                  flex: 1,
-                  borderRadius: 14,
-                  border: "1px solid rgba(0,0,0,0.12)",
-                  padding: "10px 12px",
-                  fontWeight: 1000,
-                  outline: "none",
-                }}
+                style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
               />
               <div style={{ fontSize: 12, fontWeight: 1000 }}>ETH</div>
             </div>
           )}
 
           <div style={{ marginTop: 14 }}>
-            <button
-              type="button"
-              onClick={sendSupport}
-              className="btn btnPrimary"
-              disabled={ethPending || usdcPending}
-              style={{ width: "100%", height: 44 }}
-            >
+            <button type="button" onClick={sendSupport} className="btn btnPrimary" disabled={ethPending || usdcPending} style={{ width: "100%", height: 44 }}>
               {ethPending || usdcPending ? "Sending…" : "Send support"}
             </button>
           </div>
@@ -810,14 +746,7 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
           </div>
 
           {supportMsg ? (
-            <div
-              style={{
-                marginTop: 10,
-                fontSize: 13,
-                fontWeight: 900,
-                color: supportMsg.startsWith("✅") ? "#065F46" : "#6B7280",
-              }}
-            >
+            <div style={{ marginTop: 10, fontSize: 13, fontWeight: 900, color: supportMsg.startsWith("✅") ? "#065F46" : "#6B7280" }}>
               {supportMsg}
             </div>
           ) : null}
