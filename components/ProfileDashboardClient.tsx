@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { useMiniKit } from "@coinbase/onchainkit/minikit";
-import { useSendTransaction, useSwitchChain, useWriteContract } from "wagmi";
+import { useAccount, useSendTransaction, useSwitchChain, useWriteContract } from "wagmi";
 import { base } from "viem/chains";
 import { erc20Abi, parseEther, parseUnits } from "viem";
 import CopyButton from "@/components/CopyButton";
@@ -114,7 +114,8 @@ function prettyWindowLabel(startIso: string, endIso: string) {
   const s = new Date(startIso);
   const e = new Date(endIso);
   const pad = (x: number) => String(x).padStart(2, "0");
-  const fmt = (dt: Date) => `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
+  const fmt = (dt: Date) =>
+    `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
   return `[${fmt(s)} → ${fmt(e)}]`;
 }
 
@@ -184,16 +185,22 @@ function SoftStatCard({
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, fontWeight: 1000, color: "rgba(0,0,0,0.55)" }}>{label}</div>
-          <div style={{ fontSize: 24, fontWeight: 1100, color: "#0A0A0A", marginTop: 2 }}>{formatInt(value)}</div>
+          <div style={{ fontSize: 24, fontWeight: 1100, color: "#0A0A0A", marginTop: 2 }}>
+            {formatInt(value)}
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-export default function ProfileDashboardClient({ address }: { address: `0x${string}` }) {
+export default function ProfileDashboardClient({ address }: { address?: `0x${string}` }) {
   const { context } = useMiniKit();
   const inBaseApp = Boolean(context);
+
+  // ✅ FIX: if no prop is passed, use connected wallet address
+  const { address: walletAddress, isConnected } = useAccount();
+  const resolvedAddress = (address ?? walletAddress) as `0x${string}` | undefined;
 
   // ===== Data state =====
   const [profile, setProfile] = useState<ProfilePayload | null>(null);
@@ -215,6 +222,29 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
   const { sendTransactionAsync, isPending: ethPending } = useSendTransaction();
   const { writeContractAsync, isPending: usdcPending } = useWriteContract();
 
+  // If no wallet connected and no address prop, show a friendly message (keeps UX safe)
+  if (!resolvedAddress) {
+    return (
+      <div style={{ paddingBottom: 40 }}>
+        {!inBaseApp ? (
+          <div className="card card-pad" style={{ marginBottom: 12 }}>
+            <div style={{ fontWeight: 1000, fontSize: 14 }}>Tip</div>
+            <div className="subtle" style={{ marginTop: 6 }}>
+              For the best experience, open this inside the <b>Base app</b> Miniapp.
+            </div>
+          </div>
+        ) : null}
+
+        <div className="card card-pad">
+          <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Connect your wallet</div>
+          <div className="subtle" style={{ marginTop: 8 }}>
+            Open inside Base app Miniapp and connect your wallet to load your profile.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ===== Load Profile (store first, Neynar fallback) =====
   useEffect(() => {
     let alive = true;
@@ -225,7 +255,7 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
       setProfileLoading(true);
 
       try {
-        const res = await fetch(`/api/profile?address=${address}&resolve=1`, { cache: "no-store" });
+        const res = await fetch(`/api/profile?address=${resolvedAddress}&resolve=1`, { cache: "no-store" });
         if (!res.ok) throw new Error(`Profile API failed (${res.status})`);
         const json = (await res.json()) as ProfilePayload;
         if (!alive) return;
@@ -243,7 +273,7 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
     return () => {
       alive = false;
     };
-  }, [address]);
+  }, [resolvedAddress]);
 
   const latestWeekStartIso = profile?.reward_summary?.latest_week_start_utc ?? null;
 
@@ -436,23 +466,35 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
           <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
               <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>All-time rewards</div>
-              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>{formatUsd(rs?.all_time_usdc ?? 0)}</div>
+              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
+                {formatUsd(rs?.all_time_usdc ?? 0)}
+              </div>
             </div>
 
             <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
               <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>Earning weeks</div>
-              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>{formatInt(rs?.earning_weeks ?? 0)}</div>
+              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
+                {formatInt(rs?.earning_weeks ?? 0)}
+              </div>
             </div>
 
             <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
-              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>{rs?.latest_week_label || "Current week"}</div>
-              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>{formatUsd(rs?.latest_week_usdc ?? 0)}</div>
+              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>
+                {rs?.latest_week_label || "Current week"}
+              </div>
+              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
+                {formatUsd(rs?.latest_week_usdc ?? 0)}
+              </div>
               <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, opacity: 0.9 }}>Current week</div>
             </div>
 
             <div className="card" style={{ padding: 16, borderRadius: 18, background: "#0000FF", color: "white" }}>
-              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>{rs?.prev_week_label || "Previous week"}</div>
-              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>{formatUsd(rs?.prev_week_usdc ?? 0)}</div>
+              <div style={{ fontSize: 12, fontWeight: 1000, opacity: 0.9 }}>
+                {rs?.prev_week_label || "Previous week"}
+              </div>
+              <div style={{ fontSize: 28, fontWeight: 1200, marginTop: 6 }}>
+                {formatUsd(rs?.prev_week_usdc ?? 0)}
+              </div>
               <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, opacity: 0.9 }}>Previous week</div>
             </div>
           </div>
@@ -578,10 +620,20 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
 
         <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.92)" }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button type="button" onClick={() => setAsset("USDC")} className={asset === "USDC" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
+            <button
+              type="button"
+              onClick={() => setAsset("USDC")}
+              className={asset === "USDC" ? "btn btnPrimary" : "btn"}
+              style={{ borderRadius: 999 }}
+            >
               USDC
             </button>
-            <button type="button" onClick={() => setAsset("ETH")} className={asset === "ETH" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
+            <button
+              type="button"
+              onClick={() => setAsset("ETH")}
+              className={asset === "ETH" ? "btn btnPrimary" : "btn"}
+              style={{ borderRadius: 999 }}
+            >
               ETH
             </button>
           </div>
@@ -609,7 +661,14 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
                   onChange={(e) => setUsdcAmount(clampAmountString(e.target.value, 6))}
                   inputMode="decimal"
                   placeholder="1"
-                  style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
+                  style={{
+                    flex: 1,
+                    borderRadius: 14,
+                    border: "1px solid rgba(0,0,0,0.12)",
+                    padding: "10px 12px",
+                    fontWeight: 1000,
+                    outline: "none",
+                  }}
                 />
                 <div style={{ fontSize: 12, fontWeight: 1000 }}>USDC</div>
               </div>
@@ -622,14 +681,27 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
                 onChange={(e) => setEthAmount(clampAmountString(e.target.value, 18))}
                 inputMode="decimal"
                 placeholder="0.001"
-                style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
+                style={{
+                  flex: 1,
+                  borderRadius: 14,
+                  border: "1px solid rgba(0,0,0,0.12)",
+                  padding: "10px 12px",
+                  fontWeight: 1000,
+                  outline: "none",
+                }}
               />
               <div style={{ fontSize: 12, fontWeight: 1000 }}>ETH</div>
             </div>
           )}
 
           <div style={{ marginTop: 14 }}>
-            <button type="button" onClick={sendSupport} className="btn btnPrimary" disabled={ethPending || usdcPending} style={{ width: "100%", height: 44 }}>
+            <button
+              type="button"
+              onClick={sendSupport}
+              className="btn btnPrimary"
+              disabled={ethPending || usdcPending}
+              style={{ width: "100%", height: 44 }}
+            >
               {ethPending || usdcPending ? "Sending…" : "Send support"}
             </button>
           </div>
@@ -642,7 +714,14 @@ export default function ProfileDashboardClient({ address }: { address: `0x${stri
           </div>
 
           {supportMsg ? (
-            <div style={{ marginTop: 10, fontSize: 13, fontWeight: 900, color: supportMsg.startsWith("✅") ? "#065F46" : "#6B7280" }}>
+            <div
+              style={{
+                marginTop: 10,
+                fontSize: 13,
+                fontWeight: 900,
+                color: supportMsg.startsWith("✅") ? "#065F46" : "#6B7280",
+              }}
+            >
               {supportMsg}
             </div>
           ) : null}
