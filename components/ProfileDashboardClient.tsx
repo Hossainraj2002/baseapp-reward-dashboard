@@ -5,43 +5,8 @@ import { useMiniKit } from "@coinbase/onchainkit/minikit";
 import { useAccount, useSendTransaction, useSwitchChain, useWriteContract } from "wagmi";
 import { base } from "viem/chains";
 import { erc20Abi, parseEther, parseUnits } from "viem";
-import CopyButton from "@/components/CopyButton"; // still used in Support section only
 
-type FarcasterUser = {
-  fid: number;
-  username: string;
-  display_name: string;
-  pfp_url: string;
-  follower_count: number;
-  following_count: number;
-  score: number;
-  bio?: string;
-};
-
-type RewardSummary = {
-  all_time_usdc: number;
-  earning_weeks: number;
-  latest_week_label: string;
-  latest_week_usdc: number;
-  prev_week_label: string;
-  prev_week_usdc: number;
-  latest_week_start_utc: string; // ISO string (UTC)
-};
-
-type RewardHistory = {
-  week_number: number;
-  week_label: string;
-  week_start_utc: string;
-  usdc: number;
-};
-
-type ProfilePayload = {
-  address: `0x${string}`;
-  farcaster_user: FarcasterUser | null;
-  reward_summary: RewardSummary;
-  reward_history: RewardHistory[];
-  source?: "store" | "neynar" | "none";
-};
+import type { ProfilePayload } from "@/lib/profilePayload";
 
 type SocialPost = {
   hash: string;
@@ -62,7 +27,7 @@ type SocialPayload = {
 
 // ===== Support config =====
 const BUILDER_ADDRESS = "0xd4a1D777e2882487d47c96bc23A47CeaB4f4f18A" as const;
-const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
+const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const; // Base USDC (6 decimals)
 const USDC_PRESETS = [0.5, 1, 2, 5, 10];
 
 function errToMessage(err: unknown): string {
@@ -82,22 +47,16 @@ function errToShortMessage(err: unknown): string | null {
   return typeof sm === "string" ? sm : null;
 }
 
-function formatUsd(n: number) {
+function formatUSDC(n: number): string {
   const v = Number.isFinite(n) ? n : 0;
-  try {
-    return `$${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(v)}`;
-  } catch {
-    return `$${v}`;
-  }
+  return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
-function formatInt(n: number) {
+
+function formatInt(n: number): string {
   const v = Number.isFinite(n) ? n : 0;
-  try {
-    return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(v);
-  } catch {
-    return `${v}`;
-  }
+  return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
+
 function clampAmountString(v: string, maxDecimals: number) {
   const cleaned = v.replace(/[^\d.]/g, "");
   const parts = cleaned.split(".");
@@ -106,9 +65,11 @@ function clampAmountString(v: string, maxDecimals: number) {
   const tail = parts.slice(1).join("").slice(0, maxDecimals);
   return `${head}.${tail}`;
 }
+
 function toIsoUtc(d: Date) {
   return d.toISOString();
 }
+
 function prettyWindowLabel(startIso: string, endIso: string) {
   const s = new Date(startIso);
   const e = new Date(endIso);
@@ -117,83 +78,57 @@ function prettyWindowLabel(startIso: string, endIso: string) {
   return `[${fmt(s)} → ${fmt(e)}]`;
 }
 
-function baseProfileUrl(address: string, username?: string | null) {
-  if (username && username.trim().length > 0) {
-    const first = username.startsWith("@") ? username.slice(1) : username;
-    return `https://base.app/profile/${encodeURIComponent(first)}`;
+/**
+ * Baseapp profile routing rule:
+ * - If Farcaster username ends with ".base.eth", use the first label (before the first dot)
+ *   Example: "akbaronchain.base.eth" -> "akbaronchain"
+ * - Otherwise, use the wallet address
+ */
+function buildBaseappProfileUrl(params: { username: string | null; address: string }): string {
+  const { username, address } = params;
+
+  const cleanAddress = address.trim();
+  const cleanUsername = (username || "").trim();
+
+  if (cleanUsername.length > 0) {
+    const lower = cleanUsername.toLowerCase();
+    if (lower.endsWith(".base.eth")) {
+      const first = cleanUsername.split(".")[0] || cleanUsername;
+      return `https://base.app/profile/${encodeURIComponent(first)}`;
+    }
   }
-  return `https://base.app/profile/${encodeURIComponent(address)}`;
+
+  return `https://base.app/profile/${encodeURIComponent(cleanAddress)}`;
 }
 
-function StatPill({
-  label,
-  value,
-  icon,
-}: {
-  label: string;
-  value: string;
-  icon: React.ReactNode;
-}) {
+function StatChip({ label, value }: { label: string; value: string }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "9px 12px",
-        borderRadius: 999,
-        background: "#EEF3FF",
-        border: "1px solid rgba(0,0,0,0.06)",
-        fontWeight: 900,
-        color: "#0A0A0A",
-        width: "100%",
-      }}
-    >
-      <span style={{ display: "grid", placeItems: "center" }}>{icon}</span>
-      <span style={{ opacity: 0.75, fontSize: 13 }}>{label}:</span>
-      <span style={{ fontWeight: 1100, fontSize: 14 }}>{value}</span>
+    <div style={chip}>
+      <span style={chipLabel}>{label}</span>
+      <span style={chipValue}>{value}</span>
     </div>
   );
 }
 
-function OnchainCard({
-  title,
-  value,
-  subtitle,
-}: {
-  title: string;
-  value: string;
-  subtitle?: string;
-}) {
+function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <div
-      style={{
-        background: "#0000FF",
-        color: "#fff",
-        borderRadius: 22,
-        padding: 18,
-        boxShadow: "0 18px 40px rgba(0,0,255,0.22)",
-        border: "1px solid rgba(255,255,255,0.12)",
-      }}
-    >
-      <div style={{ fontWeight: 1000, opacity: 0.92, fontSize: 13 }}>{title}</div>
-      <div style={{ marginTop: 10, fontWeight: 1300, fontSize: 40, letterSpacing: -0.5 }}>{value}</div>
-      {subtitle ? (
-        <div style={{ marginTop: 8, fontWeight: 900, opacity: 0.9, fontSize: 13 }}>{subtitle}</div>
-      ) : null}
+    <div style={{ fontSize: 13, fontWeight: 950, marginTop: 14, marginBottom: 10, color: "#0A0A0A" }}>
+      {children}
     </div>
   );
 }
 
-function SoftStatCard({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: number;
-}) {
+function OnchainCard({ title, value, sub }: { title: string; value: string; sub?: string | null }) {
+  return (
+    <div style={onchainCard}>
+      <div style={onchainTitle}>{title}</div>
+      <div style={onchainValue}>{value}</div>
+      {sub ? <div style={onchainSub}>{sub}</div> : null}
+    </div>
+  );
+}
+
+function SoftStatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
   return (
     <div
       className="card"
@@ -228,17 +163,30 @@ function SoftStatCard({
   );
 }
 
-export default function ProfileDashboardClient(props: { address?: `0x${string}` }) {
-  // hooks MUST stay top-level
+export default function ProfileDashboardClient() {
   const { context } = useMiniKit();
   const inBaseApp = Boolean(context);
 
-  const { address: wagmiAddress } = useAccount();
-  const activeAddress = (props.address ?? wagmiAddress) as `0x${string}` | undefined;
+  // wagmi fallback
+  const { address: wagmiAddress, isConnected: _isConnected } = useAccount();
 
-  const { switchChainAsync } = useSwitchChain();
-  const { sendTransactionAsync, isPending: ethPending } = useSendTransaction();
-  const { writeContractAsync, isPending: usdcPending } = useWriteContract();
+  // Robust address detection for Base app + fallback to wagmi
+  const activeAddress: `0x${string}` | null = useMemo(() => {
+    const c: any = context as any;
+
+    const candidates: Array<unknown> = [
+      c?.user?.walletAddress,
+      c?.user?.address,
+      c?.walletAddress,
+      c?.address,
+      wagmiAddress,
+    ];
+
+    for (const v of candidates) {
+      if (typeof v === "string" && /^0x[a-fA-F0-9]{40}$/.test(v)) return v as `0x${string}`;
+    }
+    return null;
+  }, [context, wagmiAddress]);
 
   // ===== Data state =====
   const [profile, setProfile] = useState<ProfilePayload | null>(null);
@@ -250,23 +198,23 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
   const [socialErr, setSocialErr] = useState<string | null>(null);
   const [socialLoading, setSocialLoading] = useState(false);
 
-  // ===== PFP fallback handling =====
-  const [pfpBroken, setPfpBroken] = useState(false);
-
   // ===== Support state =====
   const [asset, setAsset] = useState<"USDC" | "ETH">("USDC");
   const [usdcAmount, setUsdcAmount] = useState<string>("1");
   const [ethAmount, setEthAmount] = useState<string>("0.001");
   const [supportMsg, setSupportMsg] = useState<string | null>(null);
 
-  // ===== Load Profile =====
+  const { switchChainAsync } = useSwitchChain();
+  const { sendTransactionAsync, isPending: ethPending } = useSendTransaction();
+  const { writeContractAsync, isPending: usdcPending } = useWriteContract();
+
+  // ===== Load Profile (NEYNAR FIRST via /api/profile?resolve=1; store fallback is inside API) =====
   useEffect(() => {
     let alive = true;
 
     async function run() {
       setProfile(null);
       setProfileErr(null);
-      setPfpBroken(false);
 
       if (!activeAddress) return;
 
@@ -292,11 +240,7 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
     };
   }, [activeAddress]);
 
-  const u = profile?.farcaster_user ?? null;
-  const rs = profile?.reward_summary ?? null;
-  const rh = profile?.reward_history ?? [];
-
-  const latestWeekStartIso = rs?.latest_week_start_utc ?? null;
+  const latestWeekStartIso = profile?.reward_summary?.latest_week_start_utc ?? null;
 
   const currentWindow = useMemo(() => {
     if (!latestWeekStartIso) return null;
@@ -312,7 +256,7 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
     return { startIso: toIsoUtc(start), endIso: toIsoUtc(end) };
   }, [latestWeekStartIso]);
 
-  // ===== Load Social =====
+  // ===== Load Social (2 blocks) =====
   useEffect(() => {
     let alive = true;
 
@@ -321,7 +265,7 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
       setSocialLast(null);
       setSocialErr(null);
 
-      const fid = u?.fid ?? null;
+      const fid = profile?.farcaster?.fid ?? profile?.farcaster_user?.fid ?? null;
       if (!fid || !currentWindow || !lastRewardWindow) return;
 
       setSocialLoading(true);
@@ -360,12 +304,7 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
     return () => {
       alive = false;
     };
-  }, [u?.fid, currentWindow, lastRewardWindow]);
-
-  const visitUrl = useMemo(() => {
-    if (!activeAddress) return null;
-    return baseProfileUrl(activeAddress, u?.username ?? null);
-  }, [activeAddress, u?.username]);
+  }, [profile, currentWindow, lastRewardWindow]);
 
   async function ensureBase() {
     try {
@@ -410,6 +349,34 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
     }
   }
 
+  const data = profile;
+  const addr = activeAddress ?? (profile?.address as `0x${string}` | undefined) ?? null;
+
+  const fc = data?.farcaster ?? data?.farcaster_user ?? null;
+
+  const scoreValue =
+    fc?.score != null ? fc.score.toFixed(2) : fc?.neynar_user_score != null ? fc.neynar_user_score.toFixed(2) : null;
+
+  const followers = fc?.follower_count != null ? formatInt(fc.follower_count) : null;
+  const following = fc?.following_count != null ? formatInt(fc.following_count) : null;
+  const fid = fc?.fid != null ? formatInt(fc.fid) : null;
+
+  const displayName = fc?.display_name || (fc?.username ? fc.username : addr ?? "Unknown");
+  const usernameLine = fc?.username ? `@${fc.username}` : addr ?? "—";
+
+  const baseappUrl = addr
+    ? buildBaseappProfileUrl({
+        username: fc?.username ?? null,
+        address: addr,
+      })
+    : null;
+
+  const historyNewestFirst = useMemo(() => {
+    const h = data?.reward_history ? [...data.reward_history] : [];
+    h.sort((a, b) => b.week_number - a.week_number);
+    return h;
+  }, [data?.reward_history]);
+
   return (
     <div style={{ paddingBottom: 40 }}>
       {!inBaseApp ? (
@@ -421,181 +388,117 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
         </div>
       ) : null}
 
-      {!activeAddress ? (
-        <div className="card card-pad">
-          <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Connect wallet</div>
-          <div className="subtle" style={{ marginTop: 6 }}>
-            Please connect your wallet to load your Profile.
-          </div>
-        </div>
-      ) : null}
-
-      {/* ===== PROFILE HEADER ===== */}
-      <div
-        style={{
-          marginTop: 10,
-          background: "#fff",
-          border: "1px solid rgba(0,0,0,0.08)",
-          borderRadius: 22,
-          padding: 16,
-          boxShadow: "0 12px 28px rgba(0,0,0,0.06)",
-        }}
-      >
+      {/* ===== Profile header (MATCH Find/address UI, but NO bio + NO copy button) ===== */}
+      <div className="card" style={headerCard}>
         {profileLoading ? (
-          <div style={{ height: 120, borderRadius: 16, background: "rgba(0,0,0,0.06)" }} />
+          <div style={{ height: 90, borderRadius: 16, background: "rgba(0,0,0,0.06)" }} />
         ) : profileErr ? (
-          <div style={{ color: "#B91C1C", fontWeight: 1000 }}>{profileErr}</div>
+          <div style={{ color: "#B91C1C", fontWeight: 900 }}>{profileErr}</div>
+        ) : !data ? (
+          <div style={{ color: "#6B7280", fontWeight: 900 }}>
+            {activeAddress ? "No profile payload returned." : "Connect/open inside Base app to load your profile."}
+          </div>
         ) : (
           <>
-            <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-              {/* Use <img> to guarantee PFP works without Next remotePatterns */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={!pfpBroken ? (u?.pfp_url || "/icon.png") : "/icon.png"}
-                alt="pfp"
-                width={78}
-                height={78}
-                onError={() => setPfpBroken(true)}
-                style={{
-                  width: 78,
-                  height: 78,
-                  borderRadius: 18,
-                  objectFit: "cover",
-                  background: "rgba(0,0,0,0.04)",
-                  border: "1px solid rgba(0,0,0,0.08)",
-                  flex: "0 0 auto",
-                }}
-              />
+            <div style={topRow}>
+              <div style={avatarWrap}>
+                {fc?.pfp_url ? (
+                  <img
+                    src={fc.pfp_url}
+                    alt=""
+                    style={avatarImg}
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div style={avatarFallback} />
+                )}
+              </div>
 
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  style={{
-                    fontSize: 22,
-                    fontWeight: 1200,
-                    color: "#0A0A0A",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {u?.display_name || u?.username || "Unknown"}
+              <div style={nameBlock}>
+                <div style={nameRow}>
+                  <div style={displayNameStyle} title={displayName}>
+                    {displayName}
+                  </div>
                 </div>
 
-                <div
-                  style={{
-                    marginTop: 4,
-                    color: "#0000FF",
-                    fontWeight: 1100,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    fontSize: 16,
-                  }}
-                >
-                  @{u?.username || "unknown"}
-                </div>
+                <div style={usernameStyle}>{usernameLine}</div>
               </div>
             </div>
 
-            {u?.bio ? (
-              <div style={{ marginTop: 10, color: "rgba(0,0,0,0.65)", fontWeight: 700, lineHeight: 1.35 }}>
-                {u.bio}
+            {/* stats only (no bio) */}
+            <div style={fullWidthInfo}>
+              <div style={statsBlock}>
+                <div style={statsRow}>
+                  {scoreValue ? <StatChip label="Score:" value={scoreValue} /> : null}
+                  {fid ? <StatChip label="FID:" value={fid} /> : null}
+                </div>
+                <div style={statsRow}>
+                  {following ? <StatChip label="Following:" value={following} /> : null}
+                  {followers ? <StatChip label="Followers:" value={followers} /> : null}
+                </div>
               </div>
-            ) : null}
-
-            {/* Pills: force 2 columns so Following + Followers stay on same row */}
-            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <StatPill label="Score" value={(u?.score ?? 0).toFixed(2)} icon={<span>🪐</span>} />
-              <StatPill label="FID" value={formatInt(u?.fid ?? 0)} icon={<span>🆔</span>} />
-              <StatPill label="Following" value={formatInt(u?.following_count ?? 0)} icon={<span>➕</span>} />
-              <StatPill label="Followers" value={formatInt(u?.follower_count ?? 0)} icon={<span>👥</span>} />
             </div>
           </>
         )}
       </div>
 
-      {/* Visit button text + perfect center */}
-      {visitUrl ? (
+      {/* Visit button (text + centered) */}
+      {baseappUrl ? (
         <a
-          href={visitUrl}
+          href={baseappUrl}
           target="_blank"
-          rel="noreferrer"
+          rel="noreferrer noopener"
           className="btn btnPrimary"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            marginTop: 12,
-            height: 54,
-            borderRadius: 18,
-            fontWeight: 1100,
-            fontSize: 16,
-            boxShadow: "0 18px 40px rgba(0,0,255,0.22)",
-            textDecoration: "none",
-          }}
+          style={baseappBtn}
         >
           Visit your profile on Baseapp
         </a>
       ) : null}
 
-      {/* ===== Onchain rewards (now uses YOUR API field names) ===== */}
-      {profile ? (
-        <div style={{ marginTop: 18 }}>
-          <div style={{ fontWeight: 1100, fontSize: 22, color: "#0A0A0A" }}>Onchain rewards</div>
-          <div className="subtle" style={{ marginTop: 4 }}>
-            Your Base app weekly reward stats
-          </div>
-
-          <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            <OnchainCard title="All-time rewards" value={formatUsd(rs?.all_time_usdc ?? 0)} />
-            <OnchainCard title="Earning weeks" value={formatInt(rs?.earning_weeks ?? 0)} />
+      {/* ===== Onchain rewards (SAME UI + SAME DATA LOGIC as Find/address) ===== */}
+      {data ? (
+        <>
+          <SectionTitle>Onchain rewards</SectionTitle>
+          <div style={cardsGrid2}>
+            <OnchainCard title="All-time rewards" value={`$${formatUSDC(data.reward_summary.all_time_usdc)}`} />
+            <OnchainCard title="Earning weeks" value={formatInt(data.reward_summary.total_weeks_earned)} />
             <OnchainCard
-              title={rs?.latest_week_label || "Current week"}
-              value={formatUsd(rs?.latest_week_usdc ?? 0)}
-              subtitle="Current week"
+              title={data.reward_summary.latest_week_label || "Current week"}
+              value={`$${formatUSDC(data.reward_summary.latest_week_usdc)}`}
+              sub="Current week"
             />
             <OnchainCard
-              title={rs?.prev_week_label || "Previous week"}
-              value={formatUsd(rs?.prev_week_usdc ?? 0)}
-              subtitle="Previous week"
+              title={data.reward_summary.previous_week_label || "Previous week"}
+              value={`$${formatUSDC(data.reward_summary.previous_week_usdc)}`}
+              sub="Previous week"
             />
           </div>
 
-          {/* Weekly wins */}
-          <div style={{ marginTop: 18 }}>
-            <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Weekly reward wins</div>
-            <div className="subtle" style={{ marginTop: 4 }}>
-              Only weeks with rewards are shown
+          <SectionTitle>Weekly reward wins</SectionTitle>
+          {historyNewestFirst.length === 0 ? (
+            <div className="card card-pad" style={{ color: "#6B7280" }}>
+              No reward weeks found for this address.
             </div>
-
-            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-              {rh.slice(0, 12).map((w) => (
-                <div
-                  key={w.week_number}
-                  className="card"
-                  style={{
-                    padding: 12,
-                    borderRadius: 16,
-                    border: "1px solid rgba(0,0,0,0.10)",
-                    background: "rgba(255,255,255,0.92)",
-                  }}
-                >
-                  <div style={{ fontSize: 13, fontWeight: 1100, color: "#0000FF" }}>
-                    {w.week_label.split("–")[0].trim()}
+          ) : (
+            <div className="card" style={{ padding: 12 }}>
+              <div style={weeksGrid3}>
+                {historyNewestFirst.map((w) => (
+                  <div key={w.week_start_utc} style={weekCell}>
+                    <div style={weekLabel} title={w.week_label}>
+                      {`Week ${w.week_number}`}
+                    </div>
+                    <div style={weekValue}>{`$${formatUSDC(w.usdc)}`}</div>
                   </div>
-                  <div style={{ fontSize: 18, fontWeight: 1200, marginTop: 6 }}>{formatUsd(w.usdc)}</div>
-                  <div className="subtle" style={{ marginTop: 6, fontSize: 11 }}>
-                    {w.week_label.split("–").slice(1).join("–").trim()}
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        </div>
+          )}
+        </>
       ) : null}
 
-      {/* ===== Social (unchanged) ===== */}
-      {profile ? (
+      {/* ===== Social (keep working section) ===== */}
+      {data ? (
         <div style={{ marginTop: 22 }}>
           <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Social</div>
           <div className="subtle" style={{ marginTop: 4 }}>
@@ -673,7 +576,7 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
         </div>
       ) : null}
 
-      {/* ===== Support (unchanged) ===== */}
+      {/* ===== Support (keep working section) ===== */}
       <div style={{ marginTop: 22 }}>
         <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Support the builder</div>
         <div className="subtle" style={{ marginTop: 4 }}>
@@ -682,10 +585,20 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
 
         <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.92)" }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button type="button" onClick={() => setAsset("USDC")} className={asset === "USDC" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
+            <button
+              type="button"
+              onClick={() => setAsset("USDC")}
+              className={asset === "USDC" ? "btn btnPrimary" : "btn"}
+              style={{ borderRadius: 999 }}
+            >
               USDC
             </button>
-            <button type="button" onClick={() => setAsset("ETH")} className={asset === "ETH" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
+            <button
+              type="button"
+              onClick={() => setAsset("ETH")}
+              className={asset === "ETH" ? "btn btnPrimary" : "btn"}
+              style={{ borderRadius: 999 }}
+            >
               ETH
             </button>
           </div>
@@ -713,7 +626,14 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
                   onChange={(e) => setUsdcAmount(clampAmountString(e.target.value, 6))}
                   inputMode="decimal"
                   placeholder="1"
-                  style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
+                  style={{
+                    flex: 1,
+                    borderRadius: 14,
+                    border: "1px solid rgba(0,0,0,0.12)",
+                    padding: "10px 12px",
+                    fontWeight: 1000,
+                    outline: "none",
+                  }}
                 />
                 <div style={{ fontSize: 12, fontWeight: 1000 }}>USDC</div>
               </div>
@@ -726,23 +646,33 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
                 onChange={(e) => setEthAmount(clampAmountString(e.target.value, 18))}
                 inputMode="decimal"
                 placeholder="0.001"
-                style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
+                style={{
+                  flex: 1,
+                  borderRadius: 14,
+                  border: "1px solid rgba(0,0,0,0.12)",
+                  padding: "10px 12px",
+                  fontWeight: 1000,
+                  outline: "none",
+                }}
               />
               <div style={{ fontSize: 12, fontWeight: 1000 }}>ETH</div>
             </div>
           )}
 
           <div style={{ marginTop: 14 }}>
-            <button type="button" onClick={sendSupport} className="btn btnPrimary" disabled={ethPending || usdcPending} style={{ width: "100%", height: 44 }}>
+            <button
+              type="button"
+              onClick={sendSupport}
+              className="btn btnPrimary"
+              disabled={ethPending || usdcPending}
+              style={{ width: "100%", height: 44 }}
+            >
               {ethPending || usdcPending ? "Sending…" : "Send support"}
             </button>
           </div>
 
-          <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
-            <div className="subtle" style={{ flex: 1, wordBreak: "break-all" }}>
-              Builder: {BUILDER_ADDRESS}
-            </div>
-            <CopyButton value={BUILDER_ADDRESS} mode="icon" />
+          <div style={{ marginTop: 10 }} className="subtle">
+            Builder: {BUILDER_ADDRESS}
           </div>
 
           {supportMsg ? (
@@ -755,3 +685,199 @@ export default function ProfileDashboardClient(props: { address?: `0x${string}` 
     </div>
   );
 }
+
+/* ---------- Styles (aligned to Find/address sizing) ---------- */
+
+const headerCard: React.CSSProperties = {
+  padding: 12,
+  borderRadius: 18,
+  boxShadow: "0 10px 30px rgba(10,10,10,0.06)",
+  overflow: "hidden",
+};
+
+const topRow: React.CSSProperties = {
+  display: "flex",
+  gap: 12,
+  alignItems: "flex-start",
+};
+
+const avatarWrap: React.CSSProperties = {
+  width: 56,
+  height: 56,
+  borderRadius: 14,
+  overflow: "hidden",
+  border: "1px solid rgba(10,10,10,0.12)",
+  background: "#FFFFFF",
+  flex: "0 0 auto",
+};
+
+const avatarImg: React.CSSProperties = {
+  width: "100%",
+  height: "100%",
+  objectFit: "cover",
+};
+
+const avatarFallback: React.CSSProperties = {
+  width: "100%",
+  height: "100%",
+  background: "linear-gradient(135deg, rgba(165,210,255,0.7), rgba(0,0,255,0.08))",
+};
+
+const nameBlock: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  paddingTop: 2,
+};
+
+const nameRow: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+};
+
+const displayNameStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 950,
+  color: "#0A0A0A",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const usernameStyle: React.CSSProperties = {
+  marginTop: 2,
+  fontSize: 13,
+  fontWeight: 950,
+  color: "#0000FF",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const fullWidthInfo: React.CSSProperties = {
+  marginTop: 10,
+};
+
+const statsBlock: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  alignItems: "flex-start",
+};
+
+const statsRow: React.CSSProperties = {
+  width: "100%",
+  display: "flex",
+  gap: 10,
+  justifyContent: "flex-start",
+  flexWrap: "nowrap",
+};
+
+const chip: React.CSSProperties = {
+  height: 24, // smaller (<= 0.7cm feel)
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "0 10px",
+  borderRadius: 999,
+  border: "1px solid rgba(10,10,10,0.10)",
+  background: "rgba(165,210,255,0.35)",
+  boxShadow: "0 10px 18px rgba(10,10,10,0.03)",
+  whiteSpace: "nowrap",
+};
+
+const chipLabel: React.CSSProperties = {
+  fontSize: 11.5,
+  color: "#6B7280",
+  fontWeight: 900,
+};
+
+const chipValue: React.CSSProperties = {
+  fontSize: 13,
+  color: "#0A0A0A",
+  fontWeight: 950,
+};
+
+const baseappBtn: React.CSSProperties = {
+  marginTop: 12,
+  width: "100%",
+  height: 38,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  textDecoration: "none",
+  borderRadius: 14,
+  boxShadow: "0 14px 30px rgba(0,0,255,0.16)",
+};
+
+const cardsGrid2: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 10,
+};
+
+const onchainCard: React.CSSProperties = {
+  borderRadius: 16,
+  padding: 14,
+  background: "#0000FF",
+  border: "1px solid rgba(0,0,0,0.06)",
+  boxShadow: "0 16px 34px rgba(0,0,255,0.18)",
+  minHeight: 78,
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "center",
+  alignItems: "center",
+  textAlign: "center",
+};
+
+const onchainTitle: React.CSSProperties = {
+  fontSize: 12.5,
+  fontWeight: 900,
+  color: "rgba(255,255,255,0.86)",
+  marginBottom: 6,
+};
+
+const onchainValue: React.CSSProperties = {
+  fontSize: 20,
+  fontWeight: 950,
+  color: "#FFFFFF",
+};
+
+const onchainSub: React.CSSProperties = {
+  marginTop: 6,
+  fontSize: 11.5,
+  fontWeight: 900,
+  color: "rgba(255,255,255,0.86)",
+};
+
+const weeksGrid3: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+  gap: 10,
+};
+
+const weekCell: React.CSSProperties = {
+  border: "1px solid rgba(10,10,10,0.12)",
+  borderRadius: 14,
+  padding: 10,
+  background: "#FFFFFF",
+  boxShadow: "0 10px 22px rgba(10,10,10,0.04)",
+  minWidth: 0,
+};
+
+const weekLabel: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 950,
+  color: "#0000FF",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const weekValue: React.CSSProperties = {
+  marginTop: 6,
+  fontSize: 14,
+  fontWeight: 950,
+  color: "#0A0A0A",
+};
