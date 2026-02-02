@@ -202,7 +202,7 @@ export default function ProfileDashboardClient() {
   const [profileLoading, setProfileLoading] = useState(false);
 
   const [socialCurrent, setSocialCurrent] = useState<SocialPayload | null>(null);
-  const [, setSocialLast] = useState<SocialPayload | null>(null);
+  const [socialLast, setSocialLast] = useState<SocialPayload | null>(null); // ✅ KEEP VALUE
   const [socialErr, setSocialErr] = useState<string | null>(null);
   const [socialLoading, setSocialLoading] = useState(false);
 
@@ -275,7 +275,6 @@ export default function ProfileDashboardClient() {
 
       const fc2 = (profile as unknown as { farcaster?: { fid?: number }; farcaster_user?: { fid?: number } } | null);
       const fid: number | null = fc2?.farcaster?.fid ?? fc2?.farcaster_user?.fid ?? null;
-
 
       if (!fid || !currentWindow || !lastRewardWindow) return;
 
@@ -506,7 +505,7 @@ export default function ProfileDashboardClient() {
         </>
       ) : null}
 
-      {/* Social (keep) */}
+      {/* Social (FULL: current + last window + top 7 posts) */}
       {data ? (
         <div style={{ marginTop: 22 }}>
           <div style={{ fontWeight: 1100, fontSize: 18, color: "#0A0A0A" }}>Social</div>
@@ -540,6 +539,53 @@ export default function ProfileDashboardClient() {
                   </div>
                 </div>
               ) : null}
+
+              {socialLast && lastRewardWindow ? (
+                <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.78)" }}>
+                  <div style={{ fontWeight: 1100, fontSize: 16, color: "#0A0A0A" }}>Social activity of last reward window</div>
+                  <div className="subtle" style={{ marginTop: 4 }}>
+                    {prettyWindowLabel(lastRewardWindow.startIso, lastRewardWindow.endIso)}
+                  </div>
+
+                  <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>📝</span>} label="Casts" value={socialLast.casts} />
+                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>❤️</span>} label="Likes" value={socialLast.likes} />
+                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>🔁</span>} label="Recasts" value={socialLast.recasts} />
+                    <SoftStatCard icon={<span style={{ fontSize: 18 }}>💬</span>} label="Replies" value={socialLast.replies} />
+                  </div>
+
+                  <div style={{ marginTop: 14 }}>
+                    <div style={{ fontWeight: 1100, color: "#0A0A0A" }}>Top posts</div>
+                    <div className="subtle" style={{ marginTop: 4 }}>Top 7 posts in this window</div>
+
+                    <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                      {(socialLast.top_posts?.length ?? 0) === 0 ? (
+                        <div
+                          className="subtle"
+                          style={{ padding: 12, borderRadius: 14, border: "1px solid rgba(0,0,0,0.08)" }}
+                        >
+                          No posts found in this timeframe.
+                        </div>
+                      ) : (
+                        socialLast.top_posts.slice(0, 7).map((p) => (
+                          <div
+                            key={p.hash}
+                            className="card"
+                            style={{ padding: 14, borderRadius: 16, border: "1px solid rgba(0,0,0,0.08)" }}
+                          >
+                            <div style={{ fontWeight: 1000, color: "#0A0A0A", lineHeight: 1.35 }}>{p.text || "—"}</div>
+                            <div className="subtle" style={{ marginTop: 8, display: "flex", gap: 14 }}>
+                              <span>❤️ {formatInt(p.likes)}</span>
+                              <span>🔁 {formatInt(p.recasts)}</span>
+                              <span>💬 {formatInt(p.replies)}</span>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </>
           )}
         </div>
@@ -554,10 +600,20 @@ export default function ProfileDashboardClient() {
 
         <div className="card card-pad" style={{ marginTop: 12, background: "rgba(245,248,255,0.92)" }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button type="button" onClick={() => setAsset("USDC")} className={asset === "USDC" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
+            <button
+              type="button"
+              onClick={() => setAsset("USDC")}
+              className={asset === "USDC" ? "btn btnPrimary" : "btn"}
+              style={{ borderRadius: 999 }}
+            >
               USDC
             </button>
-            <button type="button" onClick={() => setAsset("ETH")} className={asset === "ETH" ? "btn btnPrimary" : "btn"} style={{ borderRadius: 999 }}>
+            <button
+              type="button"
+              onClick={() => setAsset("ETH")}
+              className={asset === "ETH" ? "btn btnPrimary" : "btn"}
+              style={{ borderRadius: 999 }}
+            >
               ETH
             </button>
           </div>
@@ -585,7 +641,14 @@ export default function ProfileDashboardClient() {
                   onChange={(e) => setUsdcAmount(clampAmountString(e.target.value, 6))}
                   inputMode="decimal"
                   placeholder="1"
-                  style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
+                  style={{
+                    flex: 1,
+                    borderRadius: 14,
+                    border: "1px solid rgba(0,0,0,0.12)",
+                    padding: "10px 12px",
+                    fontWeight: 1000,
+                    outline: "none",
+                  }}
                 />
                 <div style={{ fontSize: 12, fontWeight: 1000 }}>USDC</div>
               </div>
@@ -598,14 +661,27 @@ export default function ProfileDashboardClient() {
                 onChange={(e) => setEthAmount(clampAmountString(e.target.value, 18))}
                 inputMode="decimal"
                 placeholder="0.001"
-                style={{ flex: 1, borderRadius: 14, border: "1px solid rgba(0,0,0,0.12)", padding: "10px 12px", fontWeight: 1000, outline: "none" }}
+                style={{
+                  flex: 1,
+                  borderRadius: 14,
+                  border: "1px solid rgba(0,0,0,0.12)",
+                  padding: "10px 12px",
+                  fontWeight: 1000,
+                  outline: "none",
+                }}
               />
               <div style={{ fontSize: 12, fontWeight: 1000 }}>ETH</div>
             </div>
           )}
 
           <div style={{ marginTop: 14 }}>
-            <button type="button" onClick={sendSupport} className="btn btnPrimary" disabled={ethPending || usdcPending} style={{ width: "100%", height: 44 }}>
+            <button
+              type="button"
+              onClick={sendSupport}
+              className="btn btnPrimary"
+              disabled={ethPending || usdcPending}
+              style={{ width: "100%", height: 44 }}
+            >
               {ethPending || usdcPending ? "Sending…" : "Send support"}
             </button>
           </div>
@@ -615,7 +691,14 @@ export default function ProfileDashboardClient() {
           </div>
 
           {supportMsg ? (
-            <div style={{ marginTop: 10, fontSize: 13, fontWeight: 900, color: supportMsg.startsWith("✅") ? "#065F46" : "#6B7280" }}>
+            <div
+              style={{
+                marginTop: 10,
+                fontSize: 13,
+                fontWeight: 900,
+                color: supportMsg.startsWith("✅") ? "#065F46" : "#6B7280",
+              }}
+            >
               {supportMsg}
             </div>
           ) : null}
