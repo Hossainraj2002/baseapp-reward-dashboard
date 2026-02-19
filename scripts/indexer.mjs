@@ -14,7 +14,7 @@ import { base } from 'viem/chains';
 // CONFIG
 // -----------------------------
 const RPC_URLS = [
-  'https://base-rpc.publicnode.com',
+  //'https://base-rpc.publicnode.com',
   'https://mainnet.base.org',
 ];
 
